@@ -169,7 +169,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("io.coil-kt.coil3:coil:3.3.0")
-    implementation("io.coil-kt.coil-compose:coil-compose:3.3.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("io.coil-kt.coil-gif:coil-gif:3.3.0")
     implementation("io.coil-kt.coil-network-okhttp:3.3.0")
     implementation("io.socket:socket.io-client:2.1.1")
