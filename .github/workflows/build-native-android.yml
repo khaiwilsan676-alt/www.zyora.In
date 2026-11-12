@@ -41,8 +41,11 @@ jobs:
           ref: main
           path: source-repo
 
-      - name: Restore native app logo asset
-        run: cp source-repo/android-native/app/src/main/res/drawable/hurry_logo.png android-native/app/src/main/res/drawable/hurry_logo.png
+      - name: Restore native app artwork and default avatars
+        run: |
+          cp source-repo/android-native/app/src/main/res/drawable/hurry_logo.png android-native/app/src/main/res/drawable/hurry_logo.png
+          cp source-repo/public/IMG_20260804_211013.jpg android-native/app/src/main/res/drawable/img_20260804_211013.jpg
+          cp source-repo/public/IMG_20260804_211031.jpg android-native/app/src/main/res/drawable/img_20260804_211031.jpg
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
