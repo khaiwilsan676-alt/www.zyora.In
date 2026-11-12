@@ -1,0 +1,411 @@
+package com.hurry.voicechat
+
+import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
+import android.content.ContextWrapper
+import android.app.Activity
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import io.socket.client.IO
+import io.socket.client.Socket
+import io.socket.emitter.Emitter
+
+private const val RAW_ME = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/"
+
+private data class MeMenu(val label: String, val asset: String)
+
+@Composable
+fun MeScreen(onOpen: (String) -> Unit = {}, onPublicProfile: (RoomProfileUser) -> Unit = {}, languageCode: String = "en") {
+    val context = LocalContext.current
+    SideEffect {
+        var currentContext: Context = context
+        while (currentContext !is Activity && currentContext is ContextWrapper) {
+            currentContext = currentContext.baseContext
+        }
+        if (currentContext is Activity) {
+            currentContext.window.statusBarColor = android.graphics.Color.TRANSPARENT
+            currentContext.window.isStatusBarContrastEnforced = false
+        }
+    }
+    
+    val prefs = remember { context.getSharedPreferences("hurry_auth", Context.MODE_PRIVATE) }
+    val uid = prefs.getString("uid", "") ?: ""
+    val email = prefs.getString("email", "") ?: ""
+    val cachedProfile = remember(uid) { NativeIndexDatabase(context).loadProfile(uid) }
+    var name by remember(uid, email, cachedProfile) {
+        mutableStateOf(
+            cachedProfile?.optString("name")?.takeIf { it.isNotBlank() && it != "null" && it.lowercase() !in listOf("guest","user","null","undefined") }
+                ?: prefs.getString("name", "")?.takeIf { it.isNotBlank() && it.lowercase() !in listOf("guest","user","null","undefined") }
+                ?: email.substringBefore("@").takeIf { it.isNotBlank() }
+                ?: "Zyora User"
+        )
+    }
+    var photo by remember(uid, cachedProfile) {
+        mutableStateOf(
+            sequenceOf("image", "avatar", "profileImageUrl").map { cachedProfile?.optString(it, "").orEmpty() }.firstOrNull { it.isNotBlank() && it != "null" }.orEmpty()
+        )
+    }
+    val savedAccount = prefs.getString("accountNumber", null)?.takeIf { it.isNotBlank() }
+        ?: prefs.getString("accountId", "") ?: ""
+    val account = savedAccount.ifBlank { nativeMeAccountNumber(uid) }
+    var visitorCount by remember(uid) { mutableIntStateOf(0) }
+    var fansCount by remember(uid) { mutableIntStateOf(0) }
+    var friendsCount by remember(uid) { mutableIntStateOf(0) }
+    var followingCount by remember(uid) { mutableIntStateOf(0) }
+    var followCountsReady by remember(uid) { mutableStateOf(false) }
+    val visitorUserId = prefs.getString("accountId", "").orEmpty().ifBlank { uid }
+    LaunchedEffect(visitorUserId) {
+        if (visitorUserId.isNotBlank()) {
+            SocialFollowApi.cachedSnapshot(context, visitorUserId)?.let { fansCount=it.followers; followingCount=it.followingCount; friendsCount=it.friends; followCountsReady=true }
+            SocialFollowApi.snapshot(context, visitorUserId, visitorUserId)?.let { fansCount=it.followers; followingCount=it.followingCount; friendsCount=it.friends; followCountsReady=true }
+        }
+    }
+    val followScope = rememberCoroutineScope()
+    DisposableEffect(visitorUserId) {
+        if (visitorUserId.isBlank()) return@DisposableEffect onDispose { }
+        val socket = IO.socket("https://zyora-server.onrender.com", IO.Options().apply { transports=arrayOf("websocket"); reconnection=true })
+        val refresh: suspend () -> Unit = {
+            SocialFollowApi.snapshot(context, visitorUserId, visitorUserId)?.let {
+                fansCount=it.followers; followingCount=it.followingCount; friendsCount=it.friends; followCountsReady=true
+            }
+        }
+        val listener = Emitter.Listener { followScope.launch { refresh() } }
+        socket.on("follow_updated", listener)
+        socket.on("profile_follow_updated", listener)
+        socket.connect()
+        onDispose {
+            socket.off("follow_updated", listener)
+            socket.off("profile_follow_updated", listener)
+            socket.disconnect()
+            socket.close()
+        }
+    }
+    LaunchedEffect(visitorUserId) {
+        if (visitorUserId.isBlank()) {
+            visitorCount = 0
+        } else {
+            val cacheKey = "visitor_count:" + visitorUserId
+            val cachedCount = withContext(Dispatchers.IO) {
+                runCatching { NativeIndexDatabase(context).loadProfile(cacheKey)?.optInt("count", 0) ?: 0 }.getOrDefault(0)
+            }
+            visitorCount = cachedCount
+            val freshCount = withContext(Dispatchers.IO) {
+                val encoded = java.net.URLEncoder.encode(visitorUserId, "UTF-8")
+                val connection = (URL("https://zyora-server.onrender.com/api/profile-visitors?userId=$encoded&type=received").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 12000
+                    readTimeout = 12000
+                }
+                try {
+                    val status = connection.responseCode
+                    if (status in 200..299) {
+                        val body = connection.inputStream.bufferedReader().use { it.readText() }
+                        val count = JSONObject(body).optJSONArray("visitors")?.length() ?: 0
+                        runCatching { NativeIndexDatabase(context).saveProfile(cacheKey, JSONObject().put("count", count)) }
+                        count
+                    } else null
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            if (freshCount != null) visitorCount = freshCount
+        }
+    }
+    val phone = prefs.getString("phone", "") ?: ""
+    val displayPhoto = photo
+    var profileCountry by remember(uid, cachedProfile) { mutableStateOf(sequenceOf(cachedProfile?.optString("countryName", ""), cachedProfile?.optString("country", ""), cachedProfile?.optString("countryCode", "")).map { it?.trim().orEmpty() }.firstOrNull { it.isNotBlank() && it != "null" }.orEmpty()) }
+
+    LaunchedEffect(uid, account) {
+        if (uid.isBlank()) return@LaunchedEffect
+        val profile = ProfilePersistence.load(
+            TargetUser(id = uid, uid = uid, accountId = account, displayAccountNumber = account)
+        ) ?: return@LaunchedEffect
+        NativeIndexDatabase(context).saveProfile(uid, profile)
+        sequenceOf("country", "countryName", "countryCode", "country_code", "nationality", "location").map { profile.optString(it, "").trim() }.firstOrNull { it.isNotBlank() && it != "null" }?.let { profileCountry = it }
+        profile.optString("name").takeIf { it.isNotBlank() && it != "null" && it.lowercase() !in listOf("guest", "user", "undefined") && it != name }?.let { name = it }
+        sequenceOf("image", "avatar", "profileImageUrl")
+            .map { profile.optString(it, "") }
+            .firstOrNull { it.isNotBlank() && it != "null" }
+            ?.takeIf { it != photo }
+            ?.let { photo = it }
+    }
+
+    val topItems = listOf(
+        MeMenu("Invite Friends", "IMG_20260915_225333.png"),
+        MeMenu("Medal", "IMG_20260915_225426.png"),
+        MeMenu("Level", "IMG_20260915_225404.png"),
+        MeMenu("Family", "IMG_20260915_225349.png"),
+        MeMenu("Store", "IMG_20260915_225447.png"),
+        MeMenu("Bag", "IMG_20260915_225506.png"),
+        MeMenu("Seller Center", "IMG_20260915_225536.png")
+    )
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(Color(0xFFF1F1F1)),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        item {
+            Column(
+                Modifier.fillMaxWidth().background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF2563EB), Color(0xFFEFF6FF), Color(0xFFF1F1F1)),
+                        startY = 0f, endY = 620f
+                    )
+                ).padding(top = 56.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(80.dp), contentAlignment = Alignment.Center) {
+                            if (displayPhoto.isNotBlank()) {
+                                AsyncImage(displayPhoto, null, Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
+                            } else {
+                                Box(Modifier.fillMaxSize().clip(CircleShape).background(Color(0xFF666666)), contentAlignment = Alignment.Center) {
+                                    Text(name.take(1).uppercase(), color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Normal)
+                                }
+                            }
+                            NativeAvatarFrameOverlay(
+                                userId = prefs.getString("accountId", uid).orEmpty().ifBlank { uid },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text(name, fontSize = 24.sp, fontWeight = FontWeight.Normal, color = Color(0xFF111827))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                if (account in setOf("100002", "100003", "500001", "500002", "500003", "500004")) {
+                                    AsyncImage(
+                                        model = RAW_ME + "IMG_20261101_125212.png",
+                                        contentDescription = "Official ID",
+                                        modifier = Modifier.height(22.dp).widthIn(max = 52.dp),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                    Text(account, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF111827))
+                                } else {
+                                    Text("ID:$account", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF111827))
+                                }
+                                androidx.compose.material3.Icon(
+                                    imageVector = Icons.Filled.ContentCopy,
+                                    contentDescription = "Copy ID",
+                                    tint = Color(0xFF555555),
+                                    modifier = Modifier.size(16.dp).clickable {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("ID", account))
+                                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+                            if (phone.isNotBlank()) Text(phone, fontSize = 12.sp, color = Color(0xFF4B5563))
+                        }
+                    }
+                    Text("›", fontSize = 32.sp, color = Color(0xFF374151), modifier = Modifier.padding(top = 10.dp).clickable { onPublicProfile(RoomProfileUser(id = uid, uid = uid, accountId = account.ifBlank { uid }, name = name, image = displayPhoto, country = profileCountry, flag = profileCountry.takeIf { it.isNotBlank() }?.let { countryFlag(it) }.orEmpty())) })
+                }
+
+                Spacer(Modifier.height(18.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    Stat(if(followCountsReady) friendsCount.toString() else "—", nativeText(languageCode, "friends"), onClick = { onOpen("Friends") })
+                    DividerV()
+                    Stat(if(followCountsReady) fansCount.toString() else "—", "Fans", onClick = { onOpen("Fans") })
+                    DividerV()
+                    Stat(if(followCountsReady) followingCount.toString() else "—", nativeText(languageCode, "following"), onClick = { onOpen("Following") })
+                    DividerV()
+                    Stat(visitorCount.toString(), nativeText(languageCode, "visitors"), onClick = { onOpen("Visitors") })
+                }
+            }
+        }
+
+        item {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.weight(1f).height(56.dp).clip(RoundedCornerShape(8.dp)).clickable { onOpen("Coins") }) {
+                    FeatureImage("file_00000000f26c81f88083bc494a0f229b.png", Modifier.fillMaxSize())
+                }
+                Box(Modifier.weight(1f).height(56.dp).clip(RoundedCornerShape(8.dp)).clickable { onOpen("Diamonds") }) {
+                    FeatureImage("file_00000000fe848207abf557a118ff8a5b.png", Modifier.fillMaxSize())
+                }
+            }
+        }
+
+        item {
+            AsyncImage(
+                RAW_ME + "file_00000000a25081fbb57574619596eed8.png", null,
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp).offset(y = (-40).dp).padding(bottom = 24.dp).heightIn(min = 76.dp).clip(RoundedCornerShape(8.dp)).clickable { onOpen("SVIP") },
+                contentScale = ContentScale.Crop
+            )
+        }
+
+        item {
+            MenuCard(topItems, onOpen, Modifier.offset(y = (-76).dp))
+        }
+
+        item {
+            val bottom = listOf("Language Setting", "Settings", "Customer Service", "Help & Feedback")
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 2.dp).offset(y = (-55).dp).clip(RoundedCornerShape(6.dp)).background(Color.White)) {
+                bottom.forEach { label ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onOpen(label) }.padding(horizontal = 16.dp, vertical = 15.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MeMenuIcon(
+                            type = when (label) {
+                                "Language Setting" -> MeIconType.LANGUAGE
+                                "Settings" -> MeIconType.SETTINGS
+                                "Customer Service" -> MeIconType.SUPPORT
+                                else -> MeIconType.HELP
+                            }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(nativeText(languageCode, when (label) { "Invite Friends" -> "invite"; "Family" -> "family"; "Level" -> "level"; "Medal" -> "medal"; "Store" -> "store"; "Bag" -> "bag"; "Seller Center" -> "seller"; "Language Setting" -> "language"; "Settings" -> "settings"; "Customer Service" -> "support"; "Help & Feedback" -> "help"; else -> label }), Modifier.weight(1f), fontSize = 15.sp, fontWeight = FontWeight.Normal, color = Color(0xFF171717))
+                        Text("›", fontSize = 25.sp, color = Color(0xFFAAAAAA))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun nativeMeAccountNumber(uid: String): String {
+    if (uid.isBlank()) return ""
+    val special = when (uid) {
+        "HUSxCrossnabgU029dWYt1TUV04hd2" -> "100002"
+        "ADqW31RGBMaosOzy0HiqexKSD7h1" -> "100003"
+        "nB0zGbJu5yf7ZeHMt5pnMIhzjGB3" -> "500003"
+        "i8uHx21ZMOSL8tR2Gim14bDJ36E3" -> "500004"
+        "100002" -> "100002"
+        "100003" -> "100003"
+        else -> null
+    }
+    if (special != null) return special
+    if (uid in setOf("500001", "500002", "500003", "500004", "500005", "700001", "700002", "700003")) return uid
+    return (10000000L + kotlin.math.abs(uid.hashCode().toLong()) % 90000000L).toString()
+}
+
+@Composable private fun Stat(value: String, label: String, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onClick).padding(horizontal = 5.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(value, fontSize = 20.sp, fontWeight = FontWeight.Normal, color = Color(0xFF111827))
+        Text(label, fontSize = 11.sp, color = Color(0xFF4B5563))
+    }
+}
+enum class MeIconType { LANGUAGE, SETTINGS, SUPPORT, HELP }
+
+@Composable
+private fun MeMenuIcon(type: MeIconType) {
+    androidx.compose.foundation.Canvas(Modifier.size(if (type == MeIconType.SUPPORT) 20.dp else 24.dp)) {
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        val c = Color(0xFF1E1E1E)
+        when (type) {
+            MeIconType.LANGUAGE -> {
+                drawCircle(color = c, radius = size.minDimension * 0.42f, center = androidx.compose.ui.geometry.Offset(size.width/2f, size.height/2f), style = stroke)
+                drawLine(color = c, start = androidx.compose.ui.geometry.Offset(size.width*0.08f, size.height/2f), end = androidx.compose.ui.geometry.Offset(size.width*0.92f, size.height/2f), strokeWidth = stroke.width)
+                drawOval(c, topLeft = androidx.compose.ui.geometry.Offset(size.width*0.33f, size.height*0.08f), size = androidx.compose.ui.geometry.Size(size.width*0.34f, size.height*0.84f), style = stroke)
+            }
+            MeIconType.SETTINGS -> {
+                val p = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.50f, size.height*.08f); lineTo(size.width*.84f, size.height*.28f); lineTo(size.width*.84f, size.height*.72f); lineTo(size.width*.50f, size.height*.92f); lineTo(size.width*.16f, size.height*.72f); lineTo(size.width*.16f, size.height*.28f); close() }
+                drawPath(path = p, color = c, style = stroke)
+                drawCircle(color = c, radius = size.minDimension*.125f, center = androidx.compose.ui.geometry.Offset(size.width/2f,size.height/2f), style = stroke)
+            }
+            MeIconType.SUPPORT -> {
+                val head = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.23f,size.height*.46f); lineTo(size.width*.23f,size.height*.35f); cubicTo(size.width*.23f,size.height*.13f,size.width*.40f,size.height*.05f,size.width*.50f,size.height*.05f); cubicTo(size.width*.60f,size.height*.05f,size.width*.77f,size.height*.13f,size.width*.77f,size.height*.35f); lineTo(size.width*.77f,size.height*.63f); cubicTo(size.width*.77f,size.height*.86f,size.width*.62f,size.height*.98f,size.width*.50f,size.height*.98f) }
+                drawPath(path = head, color = c, style = stroke)
+                drawLine(color = c, start = androidx.compose.ui.geometry.Offset(size.width*.23f,size.height*.43f), end = androidx.compose.ui.geometry.Offset(size.width*.23f,size.height*.64f), strokeWidth=stroke.width)
+                drawLine(color = c, start = androidx.compose.ui.geometry.Offset(size.width*.77f,size.height*.43f), end = androidx.compose.ui.geometry.Offset(size.width*.77f,size.height*.64f), strokeWidth=stroke.width)
+                val left = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.23f,size.height*.43f); lineTo(size.width*.14f,size.height*.43f); cubicTo(size.width*.08f,size.height*.43f,size.width*.08f,size.height*.64f,size.width*.14f,size.height*.64f); lineTo(size.width*.23f,size.height*.64f); close() }
+                drawPath(path = left, color = c, style = stroke)
+                val right = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.77f,size.height*.43f); lineTo(size.width*.86f,size.height*.43f); cubicTo(size.width*.92f,size.height*.43f,size.width*.92f,size.height*.64f,size.width*.86f,size.height*.64f); lineTo(size.width*.77f,size.height*.64f); close() }
+                drawPath(path = right, color = c, style = stroke)
+                val smile = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.38f,size.height*.58f); cubicTo(size.width*.38f,size.height*.69f,size.width*.62f,size.height*.69f,size.width*.62f,size.height*.58f) }
+                drawPath(path = smile, color = c, style = stroke)
+            }
+            MeIconType.HELP -> {
+                drawCircle(color = c, radius = size.minDimension*.42f, center = androidx.compose.ui.geometry.Offset(size.width/2f,size.height/2f), style = stroke)
+                val q = androidx.compose.ui.graphics.Path().apply { moveTo(size.width*.38f,size.height*.38f); cubicTo(size.width*.40f,size.height*.28f,size.width*.60f,size.height*.28f,size.width*.62f,size.height*.40f); cubicTo(size.width*.64f,size.height*.53f,size.width*.50f,size.height*.55f,size.width*.50f,size.height*.68f) }
+                drawPath(path = q, color = c, style = stroke)
+                drawCircle(color = c, radius =size.minDimension*.04f,center=androidx.compose.ui.geometry.Offset(size.width/2f,size.height*.78f))
+            }
+        }
+    }
+}
+@Composable private fun DividerV() { Box(Modifier.height(34.dp).width(1.dp).background(Color(0xFFD1D5DB))) }
+
+@Composable private fun FeatureImage(asset: String, modifier: Modifier) {
+    AsyncImage(RAW_ME + asset, null, modifier.clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+}
+
+@Composable private fun MenuCard(items: List<MeMenu>, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.padding(horizontal = 16.dp, vertical = 0.dp).clip(RoundedCornerShape(6.dp)).background(Color.White)) {
+        items.forEach { item ->
+            Row(Modifier.fillMaxWidth().clickable { onOpen(item.label) }.padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(RAW_ME + item.asset, null, Modifier.size(if (item.label == "Seller Center") 40.dp else 32.dp), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(16.dp))
+                
+                Text(item.label, Modifier.weight(1f), fontSize = 15.sp, fontWeight = FontWeight.Normal, color = Color(0xFF171717))
+                
+                if (item.label == "Family") {
+                    Text("Join Now", fontSize = 12.sp, color = Color(0xFF6B7280), modifier = Modifier.padding(end = 8.dp))
+                } else if (item.label == "Invite Friends") {
+                    AsyncImage(
+                        model = RAW_ME + "IMG_20261022_212625.png",
+                        contentDescription = null,
+                        modifier = Modifier.height(20.dp).padding(end = 8.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else if (item.label == "Level") {
+                    Box(
+                        modifier = Modifier.padding(end = 8.dp),
+                        contentAlignment = Alignment.CenterEnd // Yaha se text right side shift ho jayega image ke andar
+                    ) {
+                        AsyncImage(
+                            model = RAW_ME + "IMG_20261028_004355.png", // Nayi Image yaha lagayi hai
+                            contentDescription = null,
+                            modifier = Modifier.height(25.dp), 
+                            contentScale = ContentScale.Fit
+                            // ColorFilter maine hata diya taaki nayi image ke real colors theek se show ho
+                        )
+                        Text(
+                            text = "Lv.0",
+                            fontSize = 10.sp, 
+                            fontWeight = FontWeight.Normal, // Text ko normal kar diya
+                            color = Color.White, // White color rakha hai
+                            modifier = Modifier.padding(end = 6.dp) // Right side se padding di hai taaki image ke andar fit rahe
+                        )
+                    }
+                }
+
+                Text("›", fontSize = 25.sp, color = Color(0xFFAAAAAA))
+            }
+        }
+    }
+}
