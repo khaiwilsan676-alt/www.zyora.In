@@ -39,10 +39,10 @@ jobs:
         with:
           repository: khaiwilsan676-alt/Zyora-Voice-Chat
           ref: main
-          path: /tmp/zyora-native-source
+          path: source-repo
 
       - name: Restore native app logo asset
-        run: cp /tmp/zyora-native-source/android-native/app/src/main/res/drawable/hurry_logo.png android-native/app/src/main/res/drawable/hurry_logo.png
+        run: cp source-repo/android-native/app/src/main/res/drawable/hurry_logo.png android-native/app/src/main/res/drawable/hurry_logo.png
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
