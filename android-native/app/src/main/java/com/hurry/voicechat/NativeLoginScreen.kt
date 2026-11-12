@@ -485,14 +485,10 @@ fun NativeLoginScreen(onLoginSuccess: () -> Unit) {
                                     .apply()
                                 onLoginSuccess()
                             } catch (t: Throwable) {
-                                if (t is androidx.credentials.exceptions.NoCredentialException) {
-                                    val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-                                        .requestIdToken(context.getString(R.string.default_web_client_id))
-                                        .requestEmail()
-                                        .build()
-                                    legacyGoogleLauncher.launch(GoogleSignIn.getClient(context, options).signInIntent)
+                                error = if (t is androidx.credentials.exceptions.NoCredentialException) {
+                                    "No Google account is available on this device. Add an account in Android Settings and try again."
                                 } else {
-                                    error = authErrorText(t.message ?: "Google sign-in failed. Please try again.")
+                                    authErrorText(t.message ?: "Google sign-in failed. Please try again.")
                                 }
                             } finally {
                                 googleLoading = false
@@ -814,29 +810,18 @@ private fun rememberRegisteredGoogleAccount(user: JSONObject, context: android.c
 
 private suspend fun googleBackendSignIn(context: android.content.Context): JSONObject {
     val credentialManager = CredentialManager.create(context)
-    val serverClientId = context.getString(R.string.default_web_client_id)
-    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId).build()
-    val signInRequest = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
-    val credential = try {
-        credentialManager.getCredential(context, signInRequest).credential
-    } catch (firstError: Exception) {
-        if (firstError is kotlinx.coroutines.CancellationException) throw firstError
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(serverClientId)
-            .setAutoSelectEnabled(false)
-            .build()
-        val fallbackRequest = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
-            .build()
-        try {
-            credentialManager.getCredential(context, fallbackRequest).credential
-        } catch (fallbackError: Exception) {
-            fallbackError.addSuppressed(firstError)
-            throw fallbackError
-        }
-    }
+    val googleIdOption = GetGoogleIdOption.Builder()
+        .setFilterByAuthorizedAccounts(false)
+        .setServerClientId(context.getString(R.string.default_web_client_id))
+        .setAutoSelectEnabled(false)
+        .build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(googleIdOption)
+        .build()
 
+    // Request exactly one Google account chooser. Do not retry with another
+    // Google picker or launch the legacy GoogleSignIn UI on the same tap.
+    val credential = credentialManager.getCredential(context, request).credential
     if (credential !is CustomCredential || credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
         throw IllegalStateException("Google did not return a valid sign-in credential.")
     }
