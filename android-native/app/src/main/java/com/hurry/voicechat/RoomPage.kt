@@ -1,0 +1,3464 @@
+package com.hurry.voicechat
+
+import android.content.Intent
+import android.net.Uri
+import android.media.MediaMetadataRetriever
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.graphics.asImageBitmap
+import android.os.Handler
+import android.os.Looper
+import io.socket.client.IO
+import io.socket.client.Socket
+import io.socket.emitter.Emitter
+import org.json.JSONArray
+import org.json.JSONObject
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.basicMarquee
+import coil3.compose.AsyncImage
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+
+// Copy only after a deliberate two-second hold; release/cancel before then does nothing.
+internal fun Modifier.twoSecondLongPress(onLongPress: () -> Unit): Modifier = pointerInput(onLongPress) {
+    detectTapGestures(
+        onPress = {
+            val released = withTimeoutOrNull(1_000L) { tryAwaitRelease() }
+            if (released == null) onLongPress()
+        }
+    )
+}
+
+// Room Admin Tag image kept in code for future use
+const val ROOM_ADMIN_TAG = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261107_154649.png"
+
+// Optimized Shader-like CPU logic to prevent room hanging
+@Composable
+fun TransparentGreenImage(url: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 7_000
+                    readTimeout = 9_000
+                    useCaches = true
+                }
+                val source = try {
+                    connection.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
+                } finally {
+                    connection.disconnect()
+                } ?: return@runCatching null
+                val result = source.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+                val width = result.width
+                val height = result.height
+                val pixels = IntArray(width * height)
+                result.getPixels(pixels, 0, width, 0, 0, width, height)
+                for (i in pixels.indices) {
+                    val color = pixels[i]
+                    val r = (color shr 16) and 0xFF
+                    val g = (color shr 8) and 0xFF
+                    val b = color and 0xFF
+                    if (g > 90 && g > r * 1.1 && g > b * 1.1) pixels[i] = android.graphics.Color.TRANSPARENT
+                }
+                result.setPixels(pixels, 0, width, 0, 0, width, height)
+                result
+            }.getOrNull()
+        }
+    }
+    bitmap?.let { Image(bitmap = it.asImageBitmap(), contentDescription = null, modifier = modifier, contentScale = ContentScale.Fit) }
+}
+
+@Composable
+fun SystemBellIcon(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val scaleX = size.width / 512f
+        val scaleY = size.height / 512f
+        drawCircle(color = Color(0xFF1685FF), radius = 65f * scaleX, center = Offset(256f * scaleX, 256f * scaleY))
+        val bellPath = Path().apply {
+            moveTo(256f * scaleX, 229f * scaleY)
+            cubicTo(246f * scaleX, 229f * scaleY, 241f * scaleX, 238f * scaleY, 241f * scaleX, 249f * scaleY)
+            lineTo(241f * scaleX, 258f * scaleY)
+            cubicTo(241f * scaleX, 267f * scaleY, 237f * scaleX, 273f * scaleY, 232f * scaleX, 279f * scaleY)
+            quadraticBezierTo(230f * scaleX, 282f * scaleY, 235f * scaleX, 282f * scaleY)
+            lineTo(277f * scaleX, 282f * scaleY)
+            quadraticBezierTo(282f * scaleX, 282f * scaleY, 280f * scaleX, 279f * scaleY)
+            cubicTo(275f * scaleX, 273f * scaleY, 271f * scaleX, 267f * scaleY, 271f * scaleX, 258f * scaleY)
+            lineTo(271f * scaleX, 249f * scaleY)
+            cubicTo(271f * scaleX, 238f * scaleY, 266f * scaleX, 229f * scaleY, 256f * scaleX, 229f * scaleY)
+            close()
+        }
+        drawPath(bellPath, color = Color.White)
+        drawOval(color = Color.White, topLeft = Offset((256f - 5f) * scaleX, (288f - 3.5f) * scaleY), size = androidx.compose.ui.geometry.Size(10f * scaleX, 7f * scaleY))
+    }
+}
+
+@Composable
+private fun ThickBar(
+    progress: Float,
+    modifier: Modifier = Modifier,
+    height: Dp = 6.dp,
+    activeColor: Color = Color(0xFF3B82F6),
+    inactiveColor: Color = Color.White.copy(alpha = 0.15f),
+    onProgressChange: ((Float) -> Unit)? = null
+) {
+    var barWidth by remember { mutableIntStateOf(0) }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(height / 2))
+            .background(inactiveColor)
+            .onSizeChanged { barWidth = it.width }
+            .then(
+                if (onProgressChange != null) {
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                if (barWidth > 0) onProgressChange((offset.x / barWidth).coerceIn(0f, 1f))
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, _ ->
+                                if (barWidth > 0) onProgressChange((change.position.x / barWidth).coerceIn(0f, 1f))
+                            }
+                        }
+                } else Modifier
+            )
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(progress.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(height / 2))
+                .background(activeColor)
+        )
+    }
+}
+
+object ZyoraKeptRoomSocketSession {
+    @Volatile var socket: Socket? = null
+    @Volatile var roomId: String = ""
+    @Volatile var accountId: String = ""
+    @Volatile private var silentRejoinPending: Boolean = false
+
+    fun retain(value: Socket, room: String, account: String) {
+        socket = value
+        roomId = room
+        accountId = account
+        silentRejoinPending = false
+    }
+
+    fun take(room: String, account: String): Socket? {
+        if (roomId != room || accountId != account) return null
+        val active = socket
+        if (active?.connected() == true) return active
+        // The mini-room was restored after its socket dropped. Rejoin silently,
+        // preserving the existing room-entry event rather than announcing a new entry.
+        silentRejoinPending = true
+        socket = null
+        return null
+    }
+
+    fun consumeSilentRejoin(room: String, account: String): Boolean {
+        if (roomId != room || accountId != account || !silentRejoinPending) return false
+        silentRejoinPending = false
+        roomId = ""
+        accountId = ""
+        socket = null
+        return true
+    }
+
+    fun clear(value: Socket) {
+        if (socket === value || roomId.isNotBlank()) {
+            socket = null
+            roomId = ""
+            accountId = ""
+            silentRejoinPending = false
+        }
+    }
+}
+
+data class RoomPageOwner(val id:String="",val uid:String="",val accountId:String="",val name:String="Room",val image:String="",val country:String="")
+data class RoomPageCurrentUser(val id:String="",val uid:String="",val accountId:String="",val name:String="User",val image:String="")
+data class NativeRoomSeat(val number:Int,val occupied:Boolean=false,val locked:Boolean=false,val muted:Boolean=false,val selfMuted:Boolean=false,val speaking:Boolean=false,val userName:String="",val userImage:String="",val accountId:String="",val gifSrc:String="",val gifTimestamp:Long=0L)
+data class NativeMention(val accountId: String, val name: String)
+data class NativeRoomMessage(val id:String,val text:String,val sender:String,val senderImage:String,val senderAccountId:String="",val timestamp:Long=System.currentTimeMillis(),val type:String="message",val mentions: List<NativeMention> = emptyList(),val imageUrl:String="")
+data class NativeEntryToast(val id:String,val name:String,val image:String,val vehicleVideo:String="",val accountId:String="",val vehicleItemId:String="")
+data class NativeRoomKickNotice(val id:String,val targetName:String,val targetImage:String,val actorName:String,val actorImage:String,val actorRole:String,val timestamp:Long=System.currentTimeMillis())
+
+@Composable
+fun RoomPage(
+    roomOwner: RoomPageOwner,
+    currentUser: RoomPageCurrentUser,
+    onClose:()->Unit={},
+    onOpenPublicProfile:(RoomProfileUser)->Unit={},
+    onBack:()->Unit=onClose,
+    onKeepRoom:(String,String,String)->Unit={_,_,_->},
+    onFollowToggle:(String,Boolean)->Unit={_,_->},
+    onRoomSupport:()->Unit={},
+    onJoinRoom:(String)->Unit={},
+    onKickNotice:(JSONObject)->Unit={}
+) {
+    val roomId=roomOwner.id.ifBlank{roomOwner.accountId.ifBlank{roomOwner.uid.ifBlank{"default-room"}}}
+    val roomOwnerAccountId = roomOwner.accountId.ifBlank { roomOwner.id }
+    val isLogoRoom = roomOwnerAccountId in setOf("100002", "100003", "500002")
+    val accountId=currentUser.accountId.ifBlank{currentUser.uid.ifBlank{currentUser.id.ifBlank{"guest"}}}
+    val clipboard = LocalClipboardManager.current
+    val appContext = LocalContext.current
+    var roomWalletBalance by remember(accountId) { mutableLongStateOf(0L) }
+    // Use exactly the same wallet identity priority as CoinsNativePage.
+    // The wallet page keys MongoDB balances by Firebase UID first, then accountId.
+    // Using accountId here created a separate zero-balance wallet, so Lucky Bag
+    // incorrectly rejected sends even while Mine > Wallet showed sufficient coins.
+    val canonicalWalletUserId = appContext.getSharedPreferences("hurry_auth", android.content.Context.MODE_PRIVATE)
+        .getString("uid", null)?.takeIf { it.isNotBlank() }
+        ?: accountId.ifBlank { currentUser.uid.ifBlank { currentUser.id } }
+
+    LaunchedEffect(canonicalWalletUserId) {
+        if (canonicalWalletUserId.isBlank() || canonicalWalletUserId == "guest") return@LaunchedEffect
+        val serverBalance = withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = java.net.URLEncoder.encode(canonicalWalletUserId, "UTF-8")
+                val conn = (java.net.URL("https://zyora-server.onrender.com/api/lucky-bag/wallet/" + encoded).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                }
+                try {
+                    if (conn.responseCode !in 200..299) error("Wallet unavailable")
+                    JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).optLong("balance", 0L).coerceAtLeast(0L)
+                } finally { conn.disconnect() }
+            }.getOrNull()
+        }
+        if (serverBalance != null) roomWalletBalance = serverBalance
+    }
+    val currentProfileKeys = listOf(currentUser.uid, currentUser.id, currentUser.accountId, accountId).filter { it.isNotBlank() }.distinct()
+    var cachedCurrentProfile by remember(currentProfileKeys) { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(currentProfileKeys) {
+        val cached = withContext(Dispatchers.IO) {
+            val profileDb = NativeIndexDatabase(appContext)
+            currentProfileKeys.firstNotNullOfOrNull { key ->
+                runCatching { profileDb.loadProfile(key) }.getOrNull()
+            }
+        }
+        cachedCurrentProfile = cached
+    }
+    val roomDisplayName = cachedCurrentProfile?.let { profile ->
+        sequenceOf("name", "displayName", "userName").map { profile.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" }
+    } ?: currentUser.name.ifBlank { "User" }
+    val roomDisplayImage = cachedCurrentProfile?.let { profile ->
+        sequenceOf("image", "avatar", "profileImageUrl").map { profile.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" }
+    } ?: "https://zyora-server.onrender.com/default-avatar.png"
+    var copiedId by remember { mutableStateOf("") }
+    var roomName by remember{mutableStateOf(roomOwner.name.ifBlank{"Room"})}
+    var roomImage by remember{mutableStateOf(roomOwner.image)}
+    var announcement by remember{mutableStateOf("")}
+    // Chat visibility is transient; the Room Settings announcement remains persisted.
+    var showRoomSettingsAnnouncementInChat by remember(roomId) { mutableStateOf(false) }
+    var roomAdminIds by remember(roomId) { mutableStateOf<List<String>>(emptyList()) }
+    // Some seat snapshots identify the signed-in user by UID while admin lists use accountId.
+    val currentUserSeatIds = setOf(accountId, currentUser.uid, currentUser.id).filter { it.isNotBlank() }.toSet()
+    val seatAdminIds = remember(roomAdminIds, currentUserSeatIds) {
+        if (roomAdminIds.any { it in currentUserSeatIds }) roomAdminIds + currentUserSeatIds else roomAdminIds
+    }
+    var locked by remember(roomId) { mutableStateOf(false) }
+    var roomPassword by remember(roomId) { mutableStateOf("") }
+    var roomAdminUsers by remember(roomId) { mutableStateOf<List<RoomInfoFollower>>(emptyList()) }
+    var roomMicMode by remember(roomId) { mutableIntStateOf(appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).getInt("micMode_$roomId", 10)) }
+    var roomTheme by remember(roomId) { mutableStateOf(appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).getString("theme_$roomId", "forest-night") ?: "forest-night") }
+    var purchasedRoomThemeImage by remember(roomId) { mutableStateOf("") }
+    var purchasedRoomThemeExpiresAt by remember(roomId) { mutableLongStateOf(0L) }
+    var roomCustomThemeUrl by remember(roomId) {
+        mutableStateOf(appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).getString("customTheme_$roomId", "").orEmpty())
+    }
+
+    // Built-in themes must never be checked against the paid Store inventory.
+    // Previously every ID except Forest Night, Moon Light and Custom was treated
+    // as a purchased theme. That made Lantern Tree / Northern Light / Sword Ruins
+    // look "unowned" and silently overwrite the saved choice with Forest Night.
+    val builtInRoomThemeIds = remember {
+        setOf(
+            "forest-night", "mood-light", "lantern-tree", "northern-light",
+            "sword-ruins", "cornfield-portal", "deer-moonlight",
+            "moon-light-new", "dark-night-flower", "custom"
+        )
+    }
+
+    LaunchedEffect(roomId, roomTheme) {
+        purchasedRoomThemeImage = ""
+        purchasedRoomThemeExpiresAt = 0L
+        if (roomTheme.isNotBlank() && roomTheme !in builtInRoomThemeIds) {
+            val selectedThemeId = roomTheme
+            // Distinguish a confirmed missing/expired purchase from a network or
+            // server error. A temporary inventory failure must not erase a theme.
+            val inventoryLookup = withContext(Dispatchers.IO) {
+                runCatching {
+                    val encoded = java.net.URLEncoder.encode(roomOwner.accountId.ifBlank { roomOwner.id.ifBlank { roomOwner.uid } }, "UTF-8")
+                    val conn = (java.net.URL("https://zyora-server.onrender.com/api/store/inventory/$encoded").openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 8000
+                        readTimeout = 8000
+                        useCaches = false
+                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                        setRequestProperty("Pragma", "no-cache")
+                    }
+                    try {
+                        if (conn.responseCode !in 200..299) error("Theme inventory unavailable")
+                        val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                        val items = root.optJSONArray("items") ?: JSONArray()
+                        (0 until items.length()).map { items.getJSONObject(it) }
+                            .firstOrNull { it.optString("itemId") == selectedThemeId && it.optString("tab") == "Theme" && it.optLong("expiresAt") > System.currentTimeMillis() }
+                            ?.let { it.optString("image", "") to it.optLong("expiresAt") }
+                    } finally { conn.disconnect() }
+                }
+            }
+            if (inventoryLookup.isSuccess) {
+                val purchased = inventoryLookup.getOrNull()
+                if (purchased == null || purchased.first.isBlank()) {
+                    if (roomTheme == selectedThemeId) {
+                        roomTheme = "forest-night"
+                        appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE)
+                            .edit().putString("theme_$roomId", "forest-night").apply()
+                    }
+                } else {
+                    purchasedRoomThemeImage = purchased.first
+                    purchasedRoomThemeExpiresAt = purchased.second
+                    delay((purchased.second - System.currentTimeMillis()).coerceAtLeast(0L))
+                    if (roomTheme == selectedThemeId && purchasedRoomThemeExpiresAt == purchased.second) {
+                        roomTheme = "forest-night"
+                        purchasedRoomThemeImage = ""
+                        purchasedRoomThemeExpiresAt = 0L
+                        appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE)
+                            .edit().putString("theme_$roomId", "forest-night").apply()
+                    }
+                }
+            }
+        }
+    }
+    
+    var showFloatingLuckyBag by remember { mutableStateOf(false) }
+    var showLuckyBagCenterReveal by remember { mutableStateOf(false) }
+    var showLuckyBagClaimedCard by remember { mutableStateOf(false) }
+    var luckyBagSenderName by remember { mutableStateOf("") }
+    var luckyBagSenderImage by remember { mutableStateOf("") }
+    var luckyBagId by remember { mutableStateOf("") }
+    var luckyBagClaiming by remember { mutableStateOf(false) }
+    var luckyBagClaimError by remember { mutableStateOf<String?>(null) }
+    var luckyBagClaimAmount by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(roomId, accountId) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encodedRoom = java.net.URLEncoder.encode(roomId, "UTF-8")
+                val connection = (java.net.URL("https://zyora-server.onrender.com/api/lucky-bag/room/$encodedRoom").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                }
+                try {
+                    if (connection.responseCode in 200..299) {
+                        val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                        val bag = root.optJSONObject("bag")
+                        if (bag != null && bag.optString("senderId") != canonicalWalletUserId) {
+                            withContext(Dispatchers.Main) {
+                                luckyBagId = bag.optString("bagId")
+                                luckyBagSenderName = bag.optString("senderName", "User")
+                                luckyBagSenderImage = bag.optString("senderImage", "")
+                                showFloatingLuckyBag = true
+                            }
+                        }
+                    }
+                } finally { connection.disconnect() }
+            }
+        }
+    }
+
+    LaunchedEffect(roomAdminIds) {
+        if (roomAdminIds.isEmpty()) {
+            roomAdminUsers = emptyList()
+        } else {
+            val found = withContext(Dispatchers.IO) {
+                roomAdminIds.mapNotNull { adminId ->
+                    runCatching {
+                        val encoded = java.net.URLEncoder.encode(adminId, "UTF-8")
+                        val conn = (java.net.URL("https://zyora-server.onrender.com/api/users?search=$encoded&accountId=$encoded&q=$encoded").openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 2500
+                            readTimeout = 2500
+                        }
+                        try {
+                            if (conn.responseCode !in 200..299) return@runCatching null
+                            val rootText = conn.inputStream.bufferedReader().use { it.readText() }
+                            val root = rootText.trim()
+                            val arr = if (root.startsWith("[")) JSONArray(root) else {
+                                val obj = JSONObject(root)
+                                obj.optJSONArray("users") ?: obj.optJSONArray("results")
+                                    ?: JSONArray().apply { obj.optJSONObject("user")?.let { put(it) } }
+                            }
+                            val user = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { u ->
+                                u.optString("accountId", u.optString("accountNumber", u.optString("displayUserNumber", ""))) == adminId ||
+                                    u.optString("uid") == adminId || u.optString("id") == adminId
+                            }
+                            user?.let { u ->
+                                RoomInfoFollower(
+                                    adminId,
+                                    u.optString("name").takeUnless { it == "null" }.orEmpty()
+                                        .ifBlank { u.optString("displayName").ifBlank { u.optString("userName", "User") } },
+                                    u.optString("image").takeUnless { it == "null" }.orEmpty()
+                                        .ifBlank { u.optString("avatar").ifBlank { u.optString("profileImageUrl", "") } }
+                                )
+                            }
+                        } finally { conn.disconnect() }
+                    }.getOrNull()
+                }
+            }
+            roomAdminUsers = found
+        }
+    }
+
+    LaunchedEffect(roomId, accountId) {
+        val cachedLock = withContext(Dispatchers.IO) { runCatching { NativeIndexDatabase(appContext).loadRoomLock(roomId) }.getOrNull() }
+        if (cachedLock != null) { locked = cachedLock.first; if (accountId == roomOwnerAccountId) roomPassword = cachedLock.second }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = java.net.URLEncoder.encode(roomId, "UTF-8")
+                val conn = (java.net.URL("https://zyora-server.onrender.com/api/rooms?roomId=$encoded").openConnection() as java.net.HttpURLConnection).apply { connectTimeout=10000; readTimeout=10000 }
+                try {
+                    if (conn.responseCode in 200..299) {
+                        val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                        val saved = root.optJSONObject("room") ?: root
+                        val name = saved.optString("name", saved.optString("roomName", "")).takeUnless { it == "null" }.orEmpty()
+                        val rawRoomImage = sequenceOf("dp", "image", "roomDp", "Room dp", "roomImage", "imageUrl", "avatar", "photo").map { saved.optString(it, "").trim() }.firstOrNull { it.isNotBlank() && it != "null" && it != "undefined" && it != "/default-avatar.png" }.orEmpty()
+                        val image = when {
+                            rawRoomImage.startsWith("data:image/", true) || rawRoomImage.isBlank() ->
+                                "https://zyora-server.onrender.com/api/rooms/image?roomId=$encoded"
+                            rawRoomImage.startsWith("/") -> "https://zyora-server.onrender.com$rawRoomImage"
+                            else -> rawRoomImage
+                        }
+                        val message = saved.optString("message", saved.optString("announcement", "")).takeUnless { it == "null" }.orEmpty()
+                        val savedMicMode = saved.optInt("micMode", roomMicMode).let { if (it in listOf(5, 10, 15)) it else roomMicMode }
+                        val savedTheme = sequenceOf("theme", "roomTheme", "Room Theme").map { saved.optString(it, "").trim() }.firstOrNull { it.isNotBlank() && it != "null" } ?: roomTheme
+                        val savedCustomTheme = sequenceOf("customTheme", "themeImage").map { saved.optString(it, "").trim() }.firstOrNull { it.isNotBlank() && it != "null" }.orEmpty()
+                        val savedLocked = saved.optBoolean("isLocked", locked)
+                        val savedRoomPassword = saved.optString("roomPassword", roomPassword).takeUnless { it == "null" }.orEmpty()
+                        val savedAdminsJson = saved.optJSONArray("admin") ?: saved.optJSONArray("admins")
+                        val savedAdmins = savedAdminsJson?.let { adminsJson ->
+                            (0 until adminsJson.length()).flatMap { i ->
+                                val entry = adminsJson.opt(i)
+                                when (entry) {
+                                    is JSONObject -> listOf("accountId", "userId", "id", "uid")
+                                        .mapNotNull { key -> entry.optString(key).trim().takeIf { it.isNotBlank() && it != "null" } }
+                                    is String -> listOf(entry.trim()).filter { it.isNotBlank() && it != "null" }
+                                    else -> emptyList()
+                                }
+                            }.distinct()
+                        }
+                        launch(Dispatchers.Main) {
+                            if (name.isNotBlank()) roomName = name
+                            if (!isLogoRoom && image.isNotBlank()) roomImage = image
+                            announcement = message
+                            showRoomSettingsAnnouncementInChat = message.isNotBlank() && saved.optBoolean("announcementChatVisible", true)
+                            roomMicMode = savedMicMode
+                            roomTheme = savedTheme
+                            if (savedAdmins != null) roomAdminIds = savedAdmins
+                            locked = savedLocked
+                            roomPassword = if (accountId == roomOwnerAccountId) savedRoomPassword else ""
+                            locked = savedLocked
+                            roomCustomThemeUrl = savedCustomTheme
+                            appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("room_locked_$roomId", savedLocked).putString("room_password_$roomId", if (accountId == roomOwnerAccountId) savedRoomPassword else "").apply()
+                            NativeIndexDatabase(appContext).saveRoomLock(roomId, savedLocked, if (accountId == roomOwnerAccountId) savedRoomPassword else "")
+                            appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putInt("micMode_$roomId", savedMicMode).putString("theme_$roomId", savedTheme).putString("customTheme_$roomId", savedCustomTheme).apply()
+                        }
+                    }
+                } finally { conn.disconnect() }
+            }
+        }
+    }
+    var followed by remember{mutableStateOf(false)}
+    var followedRoomUsers by remember(roomId) { mutableStateOf<List<RoomInfoFollower>>(emptyList()) }
+    LaunchedEffect(roomId) {
+        followedRoomUsers = withContext(Dispatchers.IO) {
+            runCatching {
+                val encodedRoom = java.net.URLEncoder.encode(roomId, "UTF-8")
+                val connection = (java.net.URL("https://zyora-server.onrender.com/api/room-follows?roomId=$encodedRoom").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                    setRequestProperty("Accept", "application/json")
+                }
+                try {
+                    if (connection.responseCode !in 200..299) error("Room members unavailable")
+                    val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                    val array = root.optJSONArray("followers") ?: JSONArray()
+                    (0 until array.length()).mapNotNull { index ->
+                        val item = array.optJSONObject(index) ?: return@mapNotNull null
+                        val id = item.optString("userId").trim()
+                        if (id.isBlank()) return@mapNotNull null
+                        RoomInfoFollower(id, item.optString("followerName").ifBlank { "User" }, item.optString("followerImage"), item.optString("followerCountry"))
+                    }.distinctBy { it.accountId }
+                } finally { connection.disconnect() }
+            }.getOrDefault(emptyList())
+        }
+    }
+    LaunchedEffect(roomId, accountId) {
+        if (accountId.isBlank() || accountId == "guest") return@LaunchedEffect
+        followed = withContext(Dispatchers.IO) {
+            runCatching {
+                val url = java.net.URL("https://zyora-server.onrender.com/api/room-follows?userId=" + java.net.URLEncoder.encode(accountId, "UTF-8"))
+                val conn = (url.openConnection() as java.net.HttpURLConnection).apply { connectTimeout = 8000; readTimeout = 8000 }
+                try {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val follows = JSONObject(body).optJSONArray("follows") ?: JSONArray()
+                    (0 until follows.length()).any { follows.optJSONObject(it)?.optString("roomId") == roomId }
+                } finally { conn.disconnect() }
+            }.getOrDefault(false)
+        }
+    }
+    var speaker by remember{mutableStateOf(true)}
+    var localVoiceSpeaking by remember { mutableStateOf(false) }
+    var publicMsgOff by remember(roomId){mutableStateOf(true)}
+    var showPublicMessageClosedToast by remember { mutableStateOf(false) }
+    var roomToastText by remember { mutableStateOf("") }
+    LaunchedEffect(roomToastText) {
+        if (roomToastText.isNotBlank()) {
+            kotlinx.coroutines.delay(1600)
+            roomToastText = ""
+        }
+    }
+    var showRoomOwnerBlockedToast by remember { mutableStateOf(false) }
+    val isRoomOwner = accountId == roomOwnerAccountId || roomAdminIds.any { it.trim() in currentUserSeatIds }
+    val canSendRoomPublicMessage = isRoomOwner || roomAdminIds.any { it == accountId }
+    LaunchedEffect(showPublicMessageClosedToast) {
+        if (showPublicMessageClosedToast) {
+            kotlinx.coroutines.delay(1800)
+            showPublicMessageClosedToast = false
+        }
+    }
+    var showChat by remember{mutableStateOf(false)}
+    val latestShowChat by rememberUpdatedState(showChat)
+    var showMessageSheet by remember{mutableStateOf(false)}
+    val roomUnreadPrefs = remember { appContext.getSharedPreferences("zyora_unread_messages", android.content.Context.MODE_PRIVATE) }
+    var roomHasUnreadMessages by remember(accountId) {
+        mutableStateOf(roomUnreadPrefs.getInt("unread_$accountId", 0) > 0)
+    }
+    DisposableEffect(accountId, roomUnreadPrefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key?.startsWith("unread_${accountId}_") == true) {
+                val prefix = "unread_${accountId}_"
+                val total = prefs.all.entries.asSequence()
+                    .filter { it.key.startsWith(prefix) }
+                    .sumOf { (it.value as? Int ?: 0).coerceAtLeast(0) }
+                prefs.edit().putInt("unread_$accountId", total).apply()
+                roomHasUnreadMessages = total > 0
+            }
+        }
+        roomUnreadPrefs.registerOnSharedPreferenceChangeListener(listener)
+        val prefix = "unread_${accountId}_"
+        val total = roomUnreadPrefs.all.entries.asSequence()
+            .filter { it.key.startsWith(prefix) }
+            .sumOf { (it.value as? Int ?: 0).coerceAtLeast(0) }
+        roomUnreadPrefs.edit().putInt("unread_$accountId", total).apply()
+        roomHasUnreadMessages = total > 0
+        onDispose { roomUnreadPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    var selectedOfficialChat by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    var pendingRoomInvitationJson by remember { mutableStateOf<String?>(null) }
+    var showMenu by remember{mutableStateOf(false)}
+    var showStore by remember { mutableStateOf(false) }
+    var storeInitialView by remember { mutableStateOf("store") }
+    var showExitMenu by remember{mutableStateOf(false)}
+    var keepingRoomForMini by remember { mutableStateOf(false) }
+    var showInfo by remember{mutableStateOf(false)}
+    var showActiveUsers by remember{mutableStateOf(false)}
+    var showSettings by remember{mutableStateOf(false)}
+    var showGift by remember{mutableStateOf(false)}
+    var showEmoji by remember{mutableStateOf(false)}
+    var showGames by remember{mutableStateOf(false)}
+    var showRoomTask by remember{mutableStateOf(false)}
+    var showWildParty by remember{mutableStateOf(false)}
+    var showFruitParty by remember{mutableStateOf(false)}
+    var showSeatSheet by remember{mutableStateOf(false)}
+    var selectedChatProfile by remember { mutableStateOf<NativeRoomMessage?>(null) }
+
+    var miniMusicTrack by remember { mutableStateOf<NativeMusicTrack?>(null) }
+    var musicControllerMinimized by remember { mutableStateOf(false) }
+    var isMusicPlaying by remember { mutableStateOf(false) }
+    var musicVolume by remember { mutableFloatStateOf(1f) }
+    var repeatOneEnabled by remember { mutableStateOf(false) }
+    var showMusicVolumeView by remember { mutableStateOf(false) }
+    var openMusicPageFromController by remember { mutableStateOf(false) }
+    var musicPlaylist by remember { mutableStateOf<List<NativeMusicTrack>>(emptyList()) }
+    var currentTrackIndex by remember { mutableIntStateOf(0) }
+    var musicCurrentTime by remember { mutableFloatStateOf(0f) }
+    var musicDuration by remember { mutableFloatStateOf(0f) }
+
+    var input by remember{mutableStateOf("")}
+    var inputSelection by remember { mutableIntStateOf(0) }
+    var pendingMentions by remember { mutableStateOf<List<NativeMention>>(emptyList()) }
+    val chatFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    var keyboardShownForChat by remember { mutableStateOf(false) }
+
+    // Resolve the real duration for tracks whose playlist metadata is missing.
+    // Never substitute a hard-coded 3:00 value in the room mini-player.
+    LaunchedEffect(miniMusicTrack?.url, miniMusicTrack?.duration) {
+        val track = miniMusicTrack ?: return@LaunchedEffect
+        if (track.duration > 0L) {
+            musicDuration = track.duration / 1000f
+        } else {
+            musicDuration = 0f
+            musicCurrentTime = 0f
+            val resolvedDuration = withContext(Dispatchers.IO) {
+                runCatching {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        val uri = Uri.parse(track.url)
+                        if (uri.scheme == "http" || uri.scheme == "https") {
+                            retriever.setDataSource(track.url, emptyMap<String, String>())
+                        } else {
+                            retriever.setDataSource(appContext, uri)
+                        }
+                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            ?.toLongOrNull() ?: 0L
+                    } finally {
+                        runCatching { retriever.release() }
+                    }
+                }.getOrDefault(0L)
+            }
+            if (miniMusicTrack?.url == track.url && resolvedDuration > 0L) {
+                musicDuration = resolvedDuration / 1000f
+            }
+        }
+    }
+
+    LaunchedEffect(isMusicPlaying, miniMusicTrack) {
+        while (isMusicPlaying && miniMusicTrack != null) {
+            kotlinx.coroutines.delay(1000)
+            if (musicDuration > 0f) {
+                if (musicCurrentTime < musicDuration) {
+                    musicCurrentTime = (musicCurrentTime + 1f).coerceAtMost(musicDuration)
+                } else if (repeatOneEnabled) {
+                    // MediaPlayer is already looping the same track; keep the UI timer on that track.
+                    musicCurrentTime = 0f
+                } else if (musicPlaylist.isNotEmpty()) {
+                    currentTrackIndex = (currentTrackIndex + 1) % musicPlaylist.size
+                    val nextTrack = musicPlaylist[currentTrackIndex]
+                    miniMusicTrack = nextTrack
+                    musicCurrentTime = 0f
+                    MusicPlaybackState.currentPlayingUri = nextTrack.url
+                    MusicPlaybackState.currentTrack = nextTrack
+                    runCatching {
+                        val intent = Intent(appContext, RoomMusicService::class.java)
+                            .setAction(RoomMusicService.ACTION_PLAY)
+                            .putExtra(RoomMusicService.EXTRA_URI, nextTrack.url)
+                            .putExtra(RoomMusicService.EXTRA_TITLE, nextTrack.name)
+                        ContextCompat.startForegroundService(appContext, intent)
+                    }
+                } else {
+                    isMusicPlaying = false
+                    MusicPlaybackState.isPlaying = false
+                }
+            }
+        }
+    }
+
+    fun musicPlayPause() {
+        val track = miniMusicTrack ?: return
+        runCatching {
+            if (isMusicPlaying) {
+                appContext.startService(Intent(appContext, RoomMusicService::class.java).setAction(RoomMusicService.ACTION_PAUSE))
+                isMusicPlaying = false
+                MusicPlaybackState.isPlaying = false
+            } else {
+                val intent = Intent(appContext, RoomMusicService::class.java)
+                    .setAction(RoomMusicService.ACTION_PLAY)
+                    .putExtra(RoomMusicService.EXTRA_URI, track.url)
+                    .putExtra(RoomMusicService.EXTRA_TITLE, track.name)
+                ContextCompat.startForegroundService(appContext, intent)
+                isMusicPlaying = true
+                MusicPlaybackState.currentPlayingUri = track.url
+                MusicPlaybackState.currentTrack = track
+                MusicPlaybackState.isPlaying = true
+            }
+        }
+    }
+
+    fun musicNext() {
+        val tracks = musicPlaylist.ifEmpty { MusicPlaybackState.playlist }
+        if (tracks.isEmpty()) return
+        val activeUri = miniMusicTrack?.url ?: MusicPlaybackState.currentPlayingUri
+        val activeIndex = tracks.indexOfFirst { it.url == activeUri }.let { if (it >= 0) it else currentTrackIndex }
+        currentTrackIndex = (activeIndex + 1).mod(tracks.size)
+        val nextTrack = tracks[currentTrackIndex]
+        miniMusicTrack = nextTrack
+        musicCurrentTime = 0f
+        musicDuration = if (nextTrack.duration > 0L) nextTrack.duration / 1000f else 0f
+        MusicPlaybackState.currentPlayingUri = nextTrack.url
+        MusicPlaybackState.currentTrack = nextTrack
+        MusicPlaybackState.isPlaying = true
+        runCatching {
+            ContextCompat.startForegroundService(appContext, Intent(appContext, RoomMusicService::class.java)
+                .setAction(RoomMusicService.ACTION_PLAY)
+                .putExtra(RoomMusicService.EXTRA_URI, nextTrack.url)
+                .putExtra(RoomMusicService.EXTRA_TITLE, nextTrack.name))
+        }
+        isMusicPlaying = true
+    }
+
+    fun musicPrev() {
+        val tracks = musicPlaylist.ifEmpty { MusicPlaybackState.playlist }
+        if (tracks.isEmpty()) return
+        val activeUri = miniMusicTrack?.url ?: MusicPlaybackState.currentPlayingUri
+        val activeIndex = tracks.indexOfFirst { it.url == activeUri }.let { if (it >= 0) it else currentTrackIndex }
+        currentTrackIndex = (activeIndex - 1 + tracks.size).mod(tracks.size)
+        val prevTrack = tracks[currentTrackIndex]
+        miniMusicTrack = prevTrack
+        musicCurrentTime = 0f
+        musicDuration = if (prevTrack.duration > 0L) prevTrack.duration / 1000f else 180f
+        MusicPlaybackState.currentPlayingUri = prevTrack.url
+        MusicPlaybackState.currentTrack = prevTrack
+        MusicPlaybackState.isPlaying = true
+        runCatching {
+            ContextCompat.startForegroundService(appContext, Intent(appContext, RoomMusicService::class.java)
+                .setAction(RoomMusicService.ACTION_PLAY)
+                .putExtra(RoomMusicService.EXTRA_URI, prevTrack.url)
+                .putExtra(RoomMusicService.EXTRA_TITLE, prevTrack.name))
+        }
+        isMusicPlaying = true
+    }
+
+    fun musicReplayOne() {
+        val track = miniMusicTrack ?: return
+        repeatOneEnabled = !repeatOneEnabled
+        runCatching {
+            appContext.startService(Intent(appContext, RoomMusicService::class.java)
+                .setAction(RoomMusicService.ACTION_REPEAT_ONE)
+                .putExtra(RoomMusicService.EXTRA_REPEAT_ONE, repeatOneEnabled))
+            appContext.startService(Intent(appContext, RoomMusicService::class.java)
+                .setAction(RoomMusicService.ACTION_SEEK)
+                .putExtra(RoomMusicService.EXTRA_POSITION_MS, 0))
+            musicCurrentTime = 0f
+            if (!isMusicPlaying) {
+                ContextCompat.startForegroundService(appContext, Intent(appContext, RoomMusicService::class.java)
+                    .setAction(RoomMusicService.ACTION_PLAY)
+                    .putExtra(RoomMusicService.EXTRA_URI, track.url)
+                    .putExtra(RoomMusicService.EXTRA_TITLE, track.name))
+                isMusicPlaying = true
+                MusicPlaybackState.currentPlayingUri = track.url
+                MusicPlaybackState.currentTrack = track
+                MusicPlaybackState.isPlaying = true
+            }
+        }
+    }
+
+    fun musicClose() {
+        runCatching {
+            appContext.startService(Intent(appContext, RoomMusicService::class.java).setAction(RoomMusicService.ACTION_STOP))
+        }
+        miniMusicTrack = null
+        isMusicPlaying = false
+        MusicPlaybackState.currentPlayingUri = null
+        MusicPlaybackState.currentTrack = null
+        MusicPlaybackState.isPlaying = false
+        musicPlaylist = emptyList()
+        musicCurrentTime = 0f
+        musicDuration = 0f    }
+
+    BackHandler(enabled = true) {
+        when {
+            showLuckyBagClaimedCard -> showLuckyBagClaimedCard = false
+            showLuckyBagCenterReveal -> showLuckyBagCenterReveal = false
+            showExitMenu -> showExitMenu = false
+            showChat -> { showChat = false; keyboardController?.hide() }
+            selectedOfficialChat != null -> selectedOfficialChat = null
+            showMessageSheet -> showMessageSheet = false
+            showMenu -> showMenu = false
+            showStore -> showStore = false
+            showInfo -> showInfo = false
+            showActiveUsers -> showActiveUsers = false
+            showSettings -> showSettings = false
+            showGift -> showGift = false
+            showEmoji -> showEmoji = false
+            showGames -> showGames = false
+            showRoomTask -> showRoomTask = false
+            showWildParty -> showWildParty = false
+            showFruitParty -> showFruitParty = false
+            showSeatSheet -> showSeatSheet = false
+            else -> showExitMenu = true
+        }
+    }
+    
+    var showOfficialAnnouncement by remember { mutableStateOf(true) }
+    var clearedBy by remember { mutableStateOf("") }
+    // A live kick owns the acknowledgement card; do not replace it with the
+    // compact restriction popup if a delayed join-block event arrives.
+    val liveKickReceived = remember(roomId, accountId) { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val kickNotices = remember { mutableStateListOf<NativeRoomKickNotice>() }
+    
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenWidthPx = remember(configuration, density) { with(density) { configuration.screenWidthDp.dp.roundToPx() } }
+    
+    // Keep room chat open while the keyboard switches between letters and emoji.
+    // The IME can briefly report hidden during that transition; only the close
+    // button should dismiss the chat composer.
+    val roomSocketRef=remember{mutableStateOf<io.socket.client.Socket?>(null)}
+
+    LaunchedEffect(showChat, roomSocketRef.value) {
+        roomSocketRef.value?.takeIf { it.connected() }?.emit(
+            "room_chat_view", JSONObject().put("roomId", roomId).put("userId", accountId).put("active", showChat)
+        )
+        if (showChat) {
+            kotlinx.coroutines.delay(120)
+            runCatching { chatFocusRequester.requestFocus() }
+            keyboardController?.show()
+        } else keyboardController?.hide()
+    }
+    
+    var selectedSeat by remember{mutableIntStateOf(0)}
+    var showInviteSheet by remember(roomId) { mutableStateOf(false) }
+    var showSeatInviteUsers by remember(roomId) { mutableStateOf(false) }
+    var incomingSeatInvite by remember(roomId) { mutableStateOf<JSONObject?>(null) }
+     LaunchedEffect(incomingSeatInvite?.optString("inviteId")) {
+        val activeInviteId = incomingSeatInvite?.optString("inviteId").orEmpty()
+        if (activeInviteId.isNotBlank()) {
+            kotlinx.coroutines.delay(60_000)
+            if (incomingSeatInvite?.optString("inviteId") == activeInviteId) {
+                incomingSeatInvite = null
+            }
+        }
+    }
+
+    val messages=remember{mutableStateListOf<NativeRoomMessage>()}
+            val chatListState = androidx.compose.foundation.lazy.rememberLazyListState()
+            LaunchedEffect(messages.size, imeVisible) { if (messages.isNotEmpty()) chatListState.animateScrollToItem(messages.lastIndex, scrollOffset = 0) }
+    val roomImagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val messageId = accountId + "-" + System.currentTimeMillis()
+            CoroutineScope(Dispatchers.Main).launch {
+                val imageUrl = runCatching { uploadChatImage(appContext, uri, messageId, "room-chat-image") }.getOrNull()
+                val activeRoomSocket = roomSocketRef.value
+                if (!imageUrl.isNullOrBlank() && activeRoomSocket?.connected() == true) {
+                    val createdAt = System.currentTimeMillis()
+                    val imageMessage = NativeRoomMessage(
+                        id = messageId, text = "📷 Image", sender = roomDisplayName,
+                        senderImage = roomDisplayImage, senderAccountId = accountId,
+                        timestamp = createdAt, type = "image", imageUrl = imageUrl
+                    )
+                    activeRoomSocket.emit(
+                        "room_message",
+                        JSONObject().put("id", messageId).put("roomId", roomId)
+                            .put("senderId", accountId).put("senderAccountId", accountId)
+                            .put("senderName", roomDisplayName).put("senderAvatar", roomDisplayImage)
+                            .put("senderImage", roomDisplayImage).put("text", "📷 Image")
+                            .put("type", "image").put("imageUrl", imageUrl).put("createdAt", createdAt)
+                    )
+                    messages.add(imageMessage)
+                } else {
+                    android.widget.Toast.makeText(appContext, "Image upload failed. Try an image under 5 MB.", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+    val entryToasts=remember{mutableStateListOf<NativeEntryToast>()}
+    val seats=remember{mutableStateListOf<NativeRoomSeat>().apply{for(i in 1..15)add(NativeRoomSeat(i))}}
+    // The owner gets one automatic attempt on the first authoritative seat snapshot only.
+    val ownerAutoSeatAttempted = remember(roomId, accountId) { java.util.concurrent.atomic.AtomicBoolean(false) }
+    // Preserve live speaker state across room_seats snapshots.
+    val activeVoiceSpeakerIds=remember(roomId){mutableStateSetOf<String>()}
+    val backendRoomUsers=remember{mutableStateListOf<ActiveUserNative>()}
+    val activeRoomUsers = backendRoomUsers.toList()
+    // Keep the room socket stable while asynchronously loaded profile/settings state updates.
+    // Reading a cached profile must not tear down and reconnect the live room connection.
+    val latestRoomDisplayName by rememberUpdatedState(roomDisplayName)
+    val latestRoomDisplayImage by rememberUpdatedState(roomDisplayImage)
+    val latestRoomName by rememberUpdatedState(roomName)
+    val latestRoomImage by rememberUpdatedState(roomImage)
+    val latestKeepingRoomForMini by rememberUpdatedState(keepingRoomForMini)
+
+    DisposableEffect(roomId,accountId,roomOwner.id,roomOwner.accountId) {
+        val roomSocketOptions = IO.Options().apply {
+            transports = arrayOf("websocket")
+            reconnection = true
+            reconnectionAttempts = Int.MAX_VALUE
+            reconnectionDelay = 1000
+            reconnectionDelayMax = 30000
+            timeout = 20000
+        }
+        // Keep the same live Socket.IO connection while the room is minimized.
+        // Reusing it preserves server presence and occupied seats without a second room_join.
+        val retainedRoomSocket = ZyoraKeptRoomSocketSession.take(roomId, accountId)
+        val roomSocket = retainedRoomSocket ?: IO.socket("https://zyora-server.onrender.com", roomSocketOptions)
+        val reusedKeptRoomSocket = retainedRoomSocket != null
+        roomSocketRef.value=roomSocket
+        val mainHandler = Handler(Looper.getMainLooper())
+        // Own room-scoped background work so requests cannot outlive this room instance.
+        val roomIoScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+        val presenceListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                val usersJson = payload.optJSONArray("users") ?: JSONArray()
+                val parsed = ArrayList<ActiveUserNative>()
+                for (index in 0 until usersJson.length()) {
+                    val user = usersJson.optJSONObject(index) ?: continue
+                    val userId = user.optString("accountId", user.optString("userId"))
+                    if (userId.isNotBlank()) {
+                        val roomCountry = sequenceOf("flag", "countryName", "country", "countryCode", "country_code")
+                            .map { user.optString(it, "").trim() }
+                            .firstOrNull { it.isNotBlank() && it != "null" }.orEmpty()
+                        parsed.add(ActiveUserNative(
+                            accountId=userId,
+                            name=user.optString("name","User").ifBlank{"User"},
+                            image=user.optString("image",""),
+                            country=roomCountry
+                        ))
+                    }
+                }
+                mainHandler.post { backendRoomUsers.clear(); backendRoomUsers.addAll(parsed) }
+            }
+        }
+        val messageListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                val id=payload.optString("id", "${payload.optString("senderId","user")}-${payload.optLong("createdAt",System.currentTimeMillis())}")
+                val type=payload.optString("type","message")
+                val senderId = payload.optString("senderAccountId",payload.optString("senderId",""))
+                val profileDb = NativeIndexDatabase(appContext)
+                val cachedSender = profileDb.loadProfile(senderId)
+                val remoteSender = payload.optString("senderName","").takeUnless { it == "null" }.orEmpty()
+                val remoteImage = payload.optString("senderAvatar",payload.optString("senderImage","")).takeUnless { it == "null" }.orEmpty()
+                val sender = remoteSender.ifBlank { cachedSender?.optString("name").orEmpty().ifBlank { "Unknown" } }
+                val image = remoteImage.ifBlank { cachedSender?.optString("image").orEmpty().ifBlank { cachedSender?.optString("avatar").orEmpty() } }
+                if (senderId.isNotBlank() && (remoteSender.isNotBlank() || remoteImage.isNotBlank())) {
+                    val updatedProfile = cachedSender ?: JSONObject()
+                    if (remoteSender.isNotBlank()) updatedProfile.put("name", remoteSender)
+                    if (remoteImage.isNotBlank()) updatedProfile.put("image", remoteImage)
+                    profileDb.saveProfile(senderId, updatedProfile)
+                }
+                val mentionJson = payload.optJSONArray("mentions") ?: JSONArray()
+                val parsedMentions = (0 until mentionJson.length()).mapNotNull { index -> mentionJson.optJSONObject(index)?.let { mention -> val targetId = mention.optString("accountId").trim(); val targetName = mention.optString("name").trim(); if (targetId.isNotBlank() && targetName.isNotBlank()) NativeMention(targetId, targetName) else null } }
+                val message=NativeRoomMessage(id,payload.optString("text",""),sender,image,senderId,payload.optLong("createdAt",System.currentTimeMillis()),type,parsedMentions,payload.optString("imageUrl"))
+                mainHandler.post {
+                    if(messages.none{it.id==message.id}) messages.add(message)
+                    if(type=="join" && entryToasts.none{it.id==id}) {
+                        entryToasts.add(NativeEntryToast(id,sender,image,accountId=senderId))
+                        mainHandler.postDelayed({entryToasts.removeAll{it.id==id}},4000)
+                    }
+                }
+            }
+        }
+        val vehicleEntryListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") != roomId) return@Listener
+            val user = payload.optString("userId")
+            val vehicle = payload.optJSONObject("vehicle") ?: return@Listener
+            val video = vehicle.optString("video").trim()
+            if (user.isBlank() || video.isBlank() || vehicle.optLong("expiresAt") <= System.currentTimeMillis()) return@Listener
+            val entryId = payload.optString("entryId")
+            mainHandler.post {
+                val index = entryToasts.indexOfFirst { it.accountId == user || it.id == entryId }
+                if (index >= 0) {
+                    entryToasts[index] = entryToasts[index].copy(vehicleVideo = video, vehicleItemId = vehicle.optString("itemId"))
+                } else {
+                    entryToasts.add(NativeEntryToast(entryId, payload.optString("senderName", "User"), payload.optString("senderImage", ""), video, user, vehicle.optString("itemId")))
+                }
+            }
+        }
+        val avatarFrameUpdatedListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            val updatedUserId = payload.optString("userId").trim()
+            if (updatedUserId.isNotBlank()) mainHandler.post {
+                nativeAvatarFrameRefreshVersions[updatedUserId] = (nativeAvatarFrameRefreshVersions[updatedUserId] ?: 0L) + 1L
+            }
+        }
+        val clearedListener = Emitter.Listener { args ->
+            val payload=args.firstOrNull() as? JSONObject
+            if(payload!=null && payload.optString("roomId")==roomId) {
+                mainHandler.post {
+                    messages.clear()
+                    kickNotices.clear()
+                    showRoomSettingsAnnouncementInChat = false
+                    appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("announcement_chat_visible_$roomId", false).apply()
+                    showOfficialAnnouncement = false
+                    // Clearing public chat must never clear the persistent Room Settings announcement.
+                    clearedBy = payload.optString("userName").ifBlank { backendRoomUsers.firstOrNull { it.accountId == payload.optString("userId") }?.name ?: "Admin" }
+                }
+            }
+        }
+        val kickAnnouncementListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") != roomId) return@Listener
+            val targetId = payload.optString("targetId")
+            val notice = NativeRoomKickNotice(
+                id = "kick-$targetId-${payload.optLong("timestamp", System.currentTimeMillis())}",
+                targetName = payload.optString("targetName").ifBlank { "User" },
+                targetImage = payload.optString("targetImage"),
+                actorName = payload.optString("actorName").ifBlank { "Admin" },
+                actorImage = payload.optString("actorImage"),
+                actorRole = if (payload.optString("actorRole") == "admin") "Room Admin" else "Room Owner",
+                timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+            )
+            // Add the system notice to the same visible chat timeline.
+            mainHandler.post {
+                if (kickNotices.none { it.id == notice.id }) kickNotices.add(notice)
+            }
+        }
+        val seatInviteResultListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") == roomId &&
+                payload.optString("inviterId") == accountId &&
+                payload.optString("status") == "accepted") {
+                roomSocket.emit("room_seat_invite_apply", JSONObject()
+                    .put("roomId", roomId).put("inviterId", accountId)
+                    .put("targetId", payload.optString("targetId"))
+                    .put("inviteId", payload.optString("inviteId"))
+                    .put("seatNumber", payload.optInt("seatNumber"))
+                    .put("userName", payload.optString("userName", "User"))
+                    .put("userImage", payload.optString("userImage", "")))
+            }
+        }
+        val seatInviteListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") == roomId && payload.optString("targetId") == accountId) {
+                mainHandler.post { incomingSeatInvite = payload }
+            }
+        }
+        val roomKickedListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") == roomId && payload.optString("targetId") == accountId) {
+                // Set before posting to main: a subsequent blocked event must not win this race.
+                liveKickReceived.set(true)
+                mainHandler.post {
+                    incomingSeatInvite = null
+                    onKickNotice(payload)
+                    onClose()
+                }
+            }
+        }
+        val roomKickBlockedListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") == roomId &&
+                payload.optString("userId") == accountId && liveKickReceived.compareAndSet(false, true)) {
+                // This event is sent to the user being removed from the live room.
+                // Show the same acknowledgement card as room_kicked; only later
+                // re-entry checks use the compact "can't join until" popup.
+                mainHandler.post {
+                    incomingSeatInvite = null
+                    onKickNotice(JSONObject()
+                        .put("roomId", roomId)
+                        .put("targetId", accountId)
+                        .put("expiresAt", payload.optLong("expiresAt", 0L))
+                        .put("ownerId", payload.optString("ownerId", roomId))
+                        .put("ownerName", payload.optString("ownerName", "Room Owner"))
+                        .put("ownerImage", payload.optString("ownerImage", ""))
+                        .put("blocked", false))
+                    onClose()
+                }
+            }
+        }
+        val walletBalanceListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("userId") == canonicalWalletUserId) {
+                val updated = payload.optLong("balance", -1L)
+                if (updated >= 0L) mainHandler.post { roomWalletBalance = updated }
+            }
+        }
+        val luckyBagBannerListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject ?: return@Listener
+            if (payload.optString("roomId") == roomId && payload.optString("senderId") != accountId) {
+                mainHandler.post {
+                    luckyBagId = payload.optString("bagId")
+                    luckyBagSenderName = payload.optString("senderName", "User")
+                    luckyBagSenderImage = payload.optString("senderImage", "")
+                    luckyBagClaimError = null
+                    showFloatingLuckyBag = true
+                }
+            }
+        }
+        val seatListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                val seatsJson = payload.optJSONArray("seats") ?: JSONArray()
+                val parsed = ArrayList<NativeRoomSeat>()
+                for (index in 0 until seatsJson.length()) {
+                    val seat = seatsJson.optJSONObject(index) ?: continue
+                    val user = seat.optJSONObject("user")
+                    val gif = seat.optJSONObject("gif")
+                    parsed.add(NativeRoomSeat(number=seat.optInt("number",index+1),occupied=seat.optBoolean("isOccupied",user != null),locked=seat.optBoolean("isLocked",false),muted=seat.optBoolean("isMuted",false),selfMuted=seat.optBoolean("isSelfMuted",false),speaking=seat.optBoolean("isSpeaking",false),userName=if (user == null) "" else user.optString("name","User"),userImage=if (user == null) "" else if (user.optString("accountId",user.optString("userId","")) in setOf("100002", "100003")) "https://zyora-voice-chat.vercel.app/logo.png" else user.optString("image","").takeIf { it.isNotBlank() && it != "null" } ?: user.optString("dp","").takeIf { it.isNotBlank() && it != "null" } ?: user.optString("avatarUrl","").takeIf { it.isNotBlank() && it != "null" } ?: user.optString("profileImage","").takeIf { it.isNotBlank() && it != "null" } ?: "",accountId=if (user == null) "" else user.optString("accountId",user.optString("userId","")),gifSrc=gif?.optString("src","") ?: "",gifTimestamp=gif?.optLong("timestamp",0L) ?: 0L))
+                }
+                mainHandler.post {
+                    val byNumber = parsed.associateBy { it.number }
+                    for (index in seats.indices) {
+                        val number = seats[index].number
+                        val incoming = byNumber[number]
+                        seats[index] = incoming?.copy(
+                            speaking = !incoming.muted && !incoming.selfMuted && (incoming.speaking || incoming.accountId in activeVoiceSpeakerIds)
+                        ) ?: NativeRoomSeat(number=number)
+                    }
+                    parsed.filter { it.number !in seats.map(NativeRoomSeat::number) }.forEach { incoming ->
+                        seats.add(incoming.copy(
+                            speaking = !incoming.muted && (incoming.speaking || incoming.accountId in activeVoiceSpeakerIds)
+                        ))
+                    }
+                    val ownerIds = setOf(roomOwner.accountId, roomOwner.id, roomOwner.uid, roomId).filter { it.isNotBlank() }.toSet()
+                    val firstSeat = parsed.firstOrNull { it.number == 1 }
+                    if (accountId in ownerIds && firstSeat != null && ownerAutoSeatAttempted.compareAndSet(false, true)) {
+                        val ownerAlreadySeated = parsed.any { it.occupied && it.accountId in ownerIds }
+                        if (!firstSeat.occupied && !firstSeat.locked && !ownerAlreadySeated) {
+                            val ownerUser = JSONObject()
+                                .put("name", latestRoomDisplayName.ifBlank { "User" })
+                                .put("image", latestRoomDisplayImage.ifBlank { "https://zyora-server.onrender.com/default-avatar.png" })
+                                .put("accountId", accountId)
+                            roomSocket.emit(
+                                "room_seat_action",
+                                JSONObject().put("roomId", roomId).put("userId", accountId)
+                                    .put("action", "take").put("seatNumber", 1).put("user", ownerUser)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val voiceSpeakerListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                val speakingUserId = payload.optString("userId").trim()
+                if (speakingUserId.isNotBlank()) {
+                    val isSpeakingNow = payload.optBoolean("speaking", false)
+                    mainHandler.post {
+                        if (isSpeakingNow) activeVoiceSpeakerIds.add(speakingUserId)
+                        else activeVoiceSpeakerIds.remove(speakingUserId)
+                        for (index in seats.indices) {
+                            val seat = seats[index]
+                            if (seat.accountId == speakingUserId) {
+                                seats[index] = seat.copy(speaking = isSpeakingNow && !seat.muted && !seat.selfMuted)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val roomFollowListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload?.optString("roomId") == roomId) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val updated = runCatching {
+                        val encodedRoom = java.net.URLEncoder.encode(roomId, "UTF-8")
+                        val connection = (java.net.URL("https://zyora-server.onrender.com/api/room-follows?roomId=$encodedRoom").openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 10000
+                            readTimeout = 10000
+                        }
+                        try {
+                            if (connection.responseCode !in 200..299) error("Room members unavailable")
+                            val array = JSONObject(connection.inputStream.bufferedReader().use { it.readText() }).optJSONArray("followers") ?: JSONArray()
+                            (0 until array.length()).mapNotNull { index ->
+                                val item = array.optJSONObject(index) ?: return@mapNotNull null
+                                val id = item.optString("userId").trim()
+                                if (id.isBlank()) return@mapNotNull null
+                                RoomInfoFollower(id, item.optString("followerName").ifBlank { "User" }, item.optString("followerImage"), item.optString("followerCountry"))
+                            }.distinctBy { it.accountId }
+                        } finally { connection.disconnect() }
+                    }.getOrDefault(emptyList())
+                    mainHandler.post { followedRoomUsers = updated }
+                }
+            }
+        }
+        val roomJoinBlockedListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                mainHandler.post { showRoomOwnerBlockedToast = true }
+                mainHandler.postDelayed({ showRoomOwnerBlockedToast = false; onClose() }, 2200)
+            }
+        }
+        val settingsListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                val updatedMicMode = payload.optInt("micMode", roomMicMode)
+                val hasAnnouncement = payload.has("announcement") || payload.has("message")
+                val updatedAnnouncement = if (payload.has("announcement")) payload.optString("announcement", "")
+                    else payload.optString("message", "")
+                mainHandler.post {
+                    if (updatedMicMode in listOf(5, 10, 15)) {
+                        roomMicMode = updatedMicMode
+                        appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE)
+                            .edit().putInt("micMode_$roomId", updatedMicMode).apply()
+                    }
+                    if (payload.has("theme")) {
+                        val updatedTheme = payload.optString("theme").trim()
+                        if (updatedTheme.isNotBlank() && updatedTheme != "null") {
+                            roomTheme = updatedTheme
+                            appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE)
+                                .edit().putString("theme_$roomId", updatedTheme).apply()
+                        }
+                    }
+                    if (payload.has("customTheme")) {
+                        val updatedCustomTheme = payload.optString("customTheme").trim()
+                        roomCustomThemeUrl = updatedCustomTheme
+                        appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE)
+                            .edit().putString("customTheme_$roomId", updatedCustomTheme).apply()
+                    }
+                    if (hasAnnouncement) {
+                        announcement = updatedAnnouncement
+                        showRoomSettingsAnnouncementInChat = if (payload.has("announcementChatVisible")) payload.optBoolean("announcementChatVisible") else updatedAnnouncement.isNotBlank()
+                        appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("announcement_chat_visible_$roomId", showRoomSettingsAnnouncementInChat).apply()
+                    }
+                    if (payload.has("publicMsgOff")) publicMsgOff = payload.optBoolean("publicMsgOff", true)
+                    if (payload.has("roomName")) roomName = payload.optString("roomName", latestRoomName)
+                    if (payload.has("addedAdminId")) {
+                        val addedAdminId = payload.optString("addedAdminId").trim()
+                        val addedAdminName = payload.optString("addedAdminName").trim().ifBlank { "User" }
+                        if (addedAdminId.isNotBlank()) {
+                            val noticeId = "admin-added-$roomId-$addedAdminId-${payload.optLong("updatedAt")}"
+                            if (messages.none { it.id == noticeId }) {
+                                val ownerName = payload.optString("actorName").trim().ifBlank { latestRoomDisplayName.ifBlank { "Room Owner" } }
+                                val ownerImage = payload.optString("actorImage").trim().ifBlank { latestRoomDisplayImage }
+                                val ownerId = payload.optString("actorId").trim().ifBlank { roomOwner.accountId.ifBlank { roomOwner.id.ifBlank { roomId } } }
+                                messages.add(NativeRoomMessage(noticeId, "Set $addedAdminName as Admin", ownerName, ownerImage, ownerId, payload.optLong("updatedAt", System.currentTimeMillis()), "message"))
+                            }
+                        }
+                    }
+                    if (payload.has("admin") && payload.optJSONArray("admin") != null) {
+                        val adminsJson = payload.optJSONArray("admin")!!
+                        roomAdminIds = (0 until adminsJson.length()).flatMap { index ->
+                            val entry = adminsJson.opt(index)
+                            when (entry) {
+                                is JSONObject -> listOf("accountId", "userId", "id", "uid")
+                                    .mapNotNull { key -> entry.optString(key).trim().takeIf { it.isNotBlank() && it != "null" } }
+                                is String -> listOf(entry.trim()).filter { it.isNotBlank() && it != "null" }
+                                else -> emptyList()
+                            }
+                        }.distinct()
+                    }
+                }
+            }
+        }
+        var joinMessageSent = reusedKeptRoomSocket || ZyoraKeptRoomSocketSession.consumeSilentRejoin(roomId, accountId)
+        val connectListener = Emitter.Listener {
+            val profileDb = NativeIndexDatabase(appContext)
+            val currentProfile = currentProfileKeys.firstNotNullOfOrNull { profileDb.loadProfile(it) } ?: JSONObject()
+            if (!currentProfile.has("name") && latestRoomDisplayName.isNotBlank()) currentProfile.put("name", latestRoomDisplayName)
+            if (!currentProfile.has("image") && latestRoomDisplayImage.isNotBlank()) currentProfile.put("image", latestRoomDisplayImage)
+            currentProfileKeys.forEach { profileDb.saveProfile(it, currentProfile) }
+            val joinPayload = JSONObject().put("roomId",roomId).put("userId",currentUser.uid.ifBlank{currentUser.id.ifBlank{accountId}}).put("accountId",accountId).put("roomOwnerId",roomOwner.uid.ifBlank{roomOwner.id.ifBlank{roomOwner.accountId.ifBlank{roomId}}}).put("name",latestRoomDisplayName).put("dp",latestRoomDisplayImage).put("roomName",latestRoomName).put("roomImage",latestRoomImage).put("suppressEntry", joinMessageSent)
+            roomSocket.emit("room_join",joinPayload)
+            if (latestShowChat) roomSocket.emit("room_chat_view", JSONObject().put("roomId", roomId).put("userId", accountId).put("active", true))
+            if (!joinMessageSent && accountId != "guest") {
+                joinMessageSent = true
+                val joinCreatedAt = System.currentTimeMillis()
+                val joinId = "$accountId-$joinCreatedAt"
+                val joinName = latestRoomDisplayName.ifBlank { "User" }
+                val joinImage = latestRoomDisplayImage.ifBlank { "https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/default-avatar.png" }
+                val nativeJoin = NativeRoomMessage(joinId,"Enter the Room",joinName,joinImage,accountId,joinCreatedAt,"join")
+                mainHandler.post {
+                    if (messages.none { it.id == joinId }) messages.add(nativeJoin)
+                    if (entryToasts.none { it.id == joinId }) { entryToasts.add(NativeEntryToast(joinId,joinName,joinImage,accountId=accountId)); mainHandler.postDelayed({ entryToasts.removeAll { it.id == joinId } },4000) }
+                }
+            }
+            roomSocket.emit("room_presence_request",JSONObject().put("roomId",roomId))
+            roomSocket.emit("room_seats_request",JSONObject().put("roomId",roomId))
+        }
+        roomSocket.on("room_presence",presenceListener)
+        roomSocket.on("room_vehicle_entry", vehicleEntryListener)
+        roomSocket.on("avatar_frame_updated", avatarFrameUpdatedListener)
+        roomSocket.on("room_seat_invite", seatInviteListener)
+        roomSocket.on("room_kicked", roomKickedListener)
+        roomSocket.on("room_kick_blocked", roomKickBlockedListener)
+        roomSocket.on("room_seat_invite_result", seatInviteResultListener)
+        roomSocket.on("room_message",messageListener)
+        roomSocket.on("room_chat_message",messageListener)
+        roomSocket.on("room_chat_cleared",clearedListener)
+        roomSocket.on("room_kick_announcement",kickAnnouncementListener)
+        roomSocket.on("room_seats",seatListener)
+        roomSocket.on("room_voice_speaker",voiceSpeakerListener)
+        val roomPublicMessageBlockedListener = Emitter.Listener { args ->
+            val payload = args.firstOrNull() as? JSONObject
+            if (payload != null && payload.optString("roomId") == roomId) {
+                mainHandler.post { showPublicMessageClosedToast = true }
+                mainHandler.postDelayed({ showPublicMessageClosedToast = false }, 1800)
+            }
+        }
+        roomSocket.on("room_settings_updated",settingsListener)
+        roomSocket.on("room_public_message_blocked", roomPublicMessageBlockedListener)
+        roomSocket.on("room_join_blocked", roomJoinBlockedListener)
+        roomSocket.on("room_follow_updated", roomFollowListener)
+        roomSocket.on("lucky_bag_banner",luckyBagBannerListener)
+        roomSocket.on("wallet_balance_updated",walletBalanceListener)
+        roomSocket.on(Socket.EVENT_CONNECT,connectListener)
+        if (roomSocket.connected()) {
+            // The retained socket is already a room member. Only refresh snapshots;
+            // do not emit room_join or generate another "Enter the Room" event.
+            roomSocket.emit("room_presence_request", JSONObject().put("roomId", roomId))
+            roomSocket.emit("room_seats_request", JSONObject().put("roomId", roomId))
+            if (latestShowChat) roomSocket.emit("room_chat_view", JSONObject().put("roomId", roomId).put("userId", accountId).put("active", true))
+        } else {
+            roomSocket.connect()
+        }
+        onDispose {
+            // Stop pending room-only fetches and queued UI callbacks before releasing listeners.
+            roomIoScope.cancel()
+            mainHandler.removeCallbacksAndMessages(null)
+            if (latestKeepingRoomForMini) {
+                // Keep the actual socket connected in the background. Disconnecting it
+                // would trigger server cleanup and release the user's occupied seat.
+                ZyoraKeptRoomSocketSession.retain(roomSocket, roomId, accountId)
+            } else {
+                ZyoraKeptRoomSocketSession.clear(roomSocket)
+                roomSocket.emit("room_chat_view", JSONObject().put("roomId", roomId).put("userId", accountId).put("active", false))
+                roomSocket.emit("room_leave",JSONObject().put("roomId",roomId).put("userId",accountId).put("accountId",accountId))
+            }
+            roomSocket.off("room_presence",presenceListener)
+            roomSocket.off("room_vehicle_entry", vehicleEntryListener)
+            roomSocket.off("avatar_frame_updated", avatarFrameUpdatedListener)
+            roomSocket.off("room_seat_invite", seatInviteListener)
+            roomSocket.off("room_kicked", roomKickedListener)
+            roomSocket.off("room_kick_blocked", roomKickBlockedListener)
+            roomSocket.off("room_seat_invite_result", seatInviteResultListener)
+            roomSocket.off("room_message",messageListener)
+            roomSocket.off("room_chat_message",messageListener)
+            roomSocket.off("room_chat_cleared",clearedListener)
+            roomSocket.off("room_kick_announcement",kickAnnouncementListener)
+            roomSocket.off("room_seats",seatListener)
+            roomSocket.off("room_voice_speaker",voiceSpeakerListener)
+            mainHandler.post { activeVoiceSpeakerIds.clear() }
+            roomSocket.off("room_settings_updated",settingsListener)
+            roomSocket.off("room_public_message_blocked", roomPublicMessageBlockedListener)
+            roomSocket.off("room_join_blocked", roomJoinBlockedListener)
+            roomSocket.off("room_follow_updated", roomFollowListener)
+            roomSocket.off("lucky_bag_banner",luckyBagBannerListener)
+            roomSocket.off("wallet_balance_updated",walletBalanceListener)
+            roomSocket.off(Socket.EVENT_CONNECT,connectListener)
+            if (!latestKeepingRoomForMini) {
+                roomSocket.disconnect()
+                roomSocket.close()
+            }
+            roomSocketRef.value=null
+            mainHandler.post { backendRoomUsers.clear() }
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)){
+        if (roomToastText.isNotBlank()) {
+            Text(
+                text = roomToastText,
+                color = Color.White,
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.Center).zIndex(102f)
+                    .clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            )
+        }
+        if (showRoomOwnerBlockedToast) {
+            Text(
+                text = "You're blocked by Room owner",
+                color = Color.White,
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.Center).zIndex(101f)
+                    .clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            )
+        }
+        if (showPublicMessageClosedToast) {
+            Text(
+                text = "Public Message are close",
+                color = Color.White,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .zIndex(100f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 14.dp, vertical = 9.dp)
+            )
+        }
+        JitsiRoomAudio(roomId=roomId,userName=roomDisplayName,canSpeak=seats.any { it.number <= roomMicMode && it.occupied && it.accountId == accountId && !it.muted && !it.selfMuted },roomSocket=roomSocketRef.value,musicUri=miniMusicTrack?.url ?: MusicPlaybackState.currentPlayingUri,musicPlaying=isMusicPlaying,onSpeakingChanged={localVoiceSpeaking=it})
+        AsyncImage(model=when(roomTheme) {
+            "forest-night" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/1784875884052~2.jpg"
+            "mood-light" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/1784533036732~2.jpg"
+            "lantern-tree" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_000000001db88211a17274a0cb143387.png"
+            "northern-light" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_000000004f388211b534832cd6b1f1a2.png"
+            "sword-ruins" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_0000000085a48211ae91d22ca50879e2.png"
+            "cornfield-portal" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_00000000baec8211b803a01c54381503.png"
+            "deer-moonlight" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_00000000dec082119e076cff4bc01164.png"
+            "moon-light-new" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_0000000050288211aecacc1c105240c7.png"
+            "dark-night-flower" -> "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_000000006ec4821182b483795db2d94c.png"
+            "custom" -> roomCustomThemeUrl.takeIf { it.startsWith("https://") } ?: "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/1784875884052~2.jpg"
+            else -> if (purchasedRoomThemeImage.isNotBlank()) "https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/$purchasedRoomThemeImage" else "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/1784875884052~2.jpg"
+        },contentDescription="Room theme background",modifier=Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+
+        // CUP AND MUSIC PILLS REVERTED TO ORIGINAL TOP LEFT OVERLAY POSITION
+        Row(modifier = Modifier.align(Alignment.TopStart).padding(top = 88.dp, start = 4.dp),verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(modifier = Modifier.height(22.dp).background(Brush.horizontalGradient(listOf(Color(0xE6242B35),Color(0x99242B35),Color.Transparent))).clickable { showInfo = true }.padding(start = 12.dp, end = 12.dp),verticalAlignment = Alignment.CenterVertically) {
+                TransparentGreenImage(url = "https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/1788258883971~2.jpg",modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("0", color = Color(0xFFEEF3A3), fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, letterSpacing = 0.1.sp)
+                Icon(Icons.Default.ChevronRight, null, tint = Color(0xFFEEF3A3), modifier = Modifier.padding(start = 4.dp).size(10.dp))
+            }
+            if (musicControllerMinimized && miniMusicTrack != null) {
+                Row(modifier = Modifier.height(26.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.30f)).clickable { musicControllerMinimized = false }.padding(start = 2.dp, end = 10.dp),verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AsyncImage(model = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/file_00000000ee70820b9fd0dfe71739874e.png",contentDescription = "Music",modifier = Modifier.size(22.dp),contentScale = ContentScale.Fit)
+                    Text(text = miniMusicTrack?.name.orEmpty(),color = Color.White,fontSize = 11.sp,fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,maxLines = 1,overflow = TextOverflow.Clip,modifier = Modifier.widthIn(max = 68.dp).basicMarquee(iterations = Int.MAX_VALUE))
+                }
+            }
+        }
+
+        // FULL ROOM CONTENT LAYOUT
+        RoomPageBlock {
+Column(Modifier.fillMaxSize()) { // REMOVED imePadding() FROM HERE TO PREVENT TOP UI FROM JUMPING
+            
+            // --- TOP SECTION (FIXED, NO IME PADDING) ---
+            Box(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth()) {
+                    // Top Room DP card and Top Right Options
+                    Row(Modifier.fillMaxWidth().padding(top=40.dp,start=0.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically){ 
+                        Row(modifier = Modifier.height(44.dp).clip(RoundedCornerShape(topEnd = 50.dp, bottomEnd = 50.dp)).background(Color.Black.copy(alpha = 0.3f)).clickable { showInfo = true }.padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FallbackAsyncImage(model = roomImage,contentDescription = "Room profile",modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),contentScale = ContentScale.Crop)
+                            Column(Modifier.padding(start = 8.dp), verticalArrangement = Arrangement.Center) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(text = roomName,color = Color.White,fontSize = 13.sp,fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,maxLines = 1,modifier = Modifier.widthIn(max = 85.dp).basicMarquee(iterations = Int.MAX_VALUE),overflow = TextOverflow.Clip)
+                                    CountryFlagImage(roomOwner.country, Modifier.size(18.dp, 12.dp))
+                                    if (accountId != roomOwner.accountId.ifBlank { roomOwner.id }) {
+                                        if (!followed) {
+                                            AsyncImage(
+                                                model = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261107_003419.png",
+                                                contentDescription = "Follow room",
+                                                modifier = Modifier.size(26.dp).clickable {
+                                            val next = !followed
+                                            followed = next
+                                            onFollowToggle(roomId, next)
+                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                                runCatching {
+                                                    val encodedUser = java.net.URLEncoder.encode(accountId, "UTF-8")
+                                                    val encodedRoom = java.net.URLEncoder.encode(roomId, "UTF-8")
+                                                    val url = if (next) java.net.URL("https://zyora-server.onrender.com/api/room-follows") else java.net.URL("https://zyora-server.onrender.com/api/room-follows?userId=$encodedUser&roomId=$encodedRoom")
+                                                    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                                                        requestMethod = if (next) "POST" else "DELETE"
+                                                        connectTimeout = 8000
+                                                        readTimeout = 8000
+                                                        if (next) {
+                                                            doOutput = true
+                                                            setRequestProperty("Content-Type", "application/json")
+                                                        }
+                                                    }
+                                                    if (next) {
+                                                        val payload = JSONObject()
+                                                            .put("userId", accountId)
+                                                            .put("roomId", roomId)
+                                                            .put("roomName", roomName)
+                                                            .put("roomImage", roomImage)
+                                                            .put("roomCountry", roomOwner.country)
+                                                            .put("followerName", roomDisplayName)
+                                                            .put("followerImage", roomDisplayImage)
+                                                            .put("followerCountry", cachedCurrentProfile?.optString("country").orEmpty().ifBlank { appContext.getSharedPreferences("hurry_auth", android.content.Context.MODE_PRIVATE).getString("country", "").orEmpty() })
+                                                        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                                                    }
+                                                    conn.responseCode
+                                                    conn.disconnect()
+                                                }
+                                            }
+                                        
+                                                },
+                                                contentScale = ContentScale.Fit
+                                            )
+                                        }
+                                    }
+                                }
+                                val roomOwnerAccountId = roomOwner.accountId.ifBlank { roomOwner.id.ifBlank { roomId } }
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.offset(y = (-3).dp)) {
+                                    when (roomOwnerAccountId) {
+                                        "100002", "100003", "500001", "500002", "500003", "500004" -> {
+                                            AsyncImage(
+                                                model = "https://zyora-voice-chat.vercel.app/IMG_20261101_125212.png",
+                                                contentDescription = "Purple ID Badge",
+                                                contentScale = ContentScale.Fit,
+                                                modifier = Modifier.height(13.dp).widthIn(min = 12.dp, max = 18.dp)
+                                            )
+                                            Text(roomOwnerAccountId, color = Color.White.copy(alpha = 0.9f), fontSize = 10.sp)
+                                        }
+                                        else -> Text("ID: $roomOwnerAccountId", color = Color.White.copy(alpha = 0.9f), fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        // Right aligned Top Icons
+                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                            Row(modifier=Modifier.height(32.dp).clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha=.30f)).clickable{showActiveUsers=true}.padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                                Image(painterResource(R.drawable.ic_hurry_people),contentDescription="Active users",modifier=Modifier.size(16.dp))
+                                Text(backendRoomUsers.size.toString(),color=Color.White,fontSize=12.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            }
+                            val isRoomOwner = accountId.isNotBlank() && accountId == roomOwner.accountId.ifBlank { roomOwner.id }
+                            if (isRoomOwner) {
+                                Box(Modifier.size(32.dp).clip(CircleShape).background(Color.Black.copy(alpha=.30f)).clickable { showSettings = true },contentAlignment=Alignment.Center){Image(painterResource(R.drawable.ic_hurry_settings),contentDescription="Room settings",modifier=Modifier.size(18.dp))}
+                            }
+                            Box(Modifier.size(32.dp).clip(CircleShape).background(Color.Black.copy(alpha=.30f)).clickable{showExitMenu=true},contentAlignment=Alignment.Center){Image(painterResource(R.drawable.ic_hurry_power),contentDescription="Exit room",modifier=Modifier.size(18.dp))}
+                        }
+                    }
+                    
+                    // FIXED HEIGHT ROW TO PREVENT JUMPING
+                    Spacer(Modifier.height(0.2.dp))
+                    Row(modifier = Modifier.padding(start = 4.dp).height(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {}
+                    
+                    // Seat tap policy: only owner/admin opens the seat action sheet; regular users take an available seat directly.
+                    val seatActorIds = setOf(accountId, currentUser.uid, currentUser.id, currentUser.accountId)
+                        .map { it.trim() }.filter { it.isNotBlank() }.toSet()
+                    val canManageRoomSeats = seatActorIds.isNotEmpty() && (
+                        seatActorIds.any { it in setOf(roomOwner.accountId, roomOwner.id, roomOwner.uid, roomId).map(String::trim).filter(String::isNotBlank).toSet() } ||
+                        roomAdminIds.any { it.trim() in seatActorIds }
+                    )
+                    val handleSeatTap: (NativeRoomSeat) -> Unit = { tappedSeat ->
+                        selectedSeat = tappedSeat.number
+                        if (tappedSeat.occupied) {
+                            showSeatSheet = false
+                        } else if (canManageRoomSeats) {
+                            showSeatSheet = true
+                        } else if (!tappedSeat.locked && accountId.isNotBlank() && accountId != "guest") {
+                            val displayName = roomDisplayName.ifBlank { "User" }
+                            val displayImage = roomDisplayImage.ifBlank { "https://zyora-server.onrender.com/default-avatar.png" }
+                            val user = JSONObject().put("name", displayName).put("image", displayImage).put("accountId", accountId)
+                            val targetIndex = seats.indexOfFirst { it.number == tappedSeat.number }
+                            if (targetIndex >= 0 && !seats[targetIndex].occupied && !seats[targetIndex].locked) {
+                                seats[targetIndex] = seats[targetIndex].copy(
+                                    occupied = true, userName = displayName, userImage = displayImage,
+                                    accountId = accountId, muted = false
+                                )
+                                roomSocketRef.value?.emit(
+                                    "room_seat_action",
+                                    JSONObject().put("roomId", roomId).put("userId", accountId)
+                                        .put("action", "take").put("seatNumber", tappedSeat.number).put("user", user)
+                                )
+                            }
+                            showSeatSheet = false
+                            selectedSeat = 0
+                        } else {
+                            showSeatSheet = false
+                            selectedSeat = 0
+                        }
+                    }
+                    // SEAT LAYOUT WITH REDUCED TOP PADDING TO SHIFT UP (5% ouper shift kiya gaya hai)
+                    val topPadding = when (roomMicMode) { 5 -> 12.dp; 15 -> 25.dp; else -> 20.dp }
+                    Column(Modifier.fillMaxWidth().padding(horizontal=10.dp).padding(top=topPadding, bottom=8.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                        val micSize = when (roomMicMode) { 15 -> 57.dp; 5 -> 68.dp; else -> 66.dp } // 5-mic seats 68dp; 15-mic seats 57dp
+                        
+                        if (roomMicMode == 5) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                                seats.take(1).forEach { seat -> NativeSeat(seat, roomOwner.accountId.ifBlank{roomOwner.id}, roomAdminIds = seatAdminIds, isSpeaking = seat.speaking || (seat.accountId == accountId && localVoiceSpeaking), seatSize = micSize) { handleSeatTap(seat) } }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                seats.drop(1).take(4).forEach { seat -> NativeSeat(seat, roomOwner.accountId.ifBlank{roomOwner.id}, roomAdminIds = seatAdminIds, isSpeaking = seat.speaking || (seat.accountId == accountId && localVoiceSpeaking), seatSize = micSize) { handleSeatTap(seat) } }
+                            }
+                        } else {
+                            val rowSizes = when (roomMicMode) {
+                                10 -> listOf(2, 4, 4)
+                                15 -> listOf(5, 5, 5) // 15 mic mode: Total 3 rows, har mein 5 seats
+                                else -> listOf(1, 4, 4, 4)
+                            }
+                            var seatOffset = 0
+                            rowSizes.forEach { rowSize ->
+                                val rowSeats = seats.drop(seatOffset).take(rowSize)
+                                seatOffset += rowSize
+                                val arrangement = if (rowSize == 1) Arrangement.Center else Arrangement.SpaceBetween
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = arrangement) {
+                                    if (roomMicMode == 10 && rowSize == 2) {
+                                        Spacer(modifier = Modifier.width(micSize)) 
+                                        rowSeats.forEach { seat -> NativeSeat(seat, roomOwner.accountId.ifBlank{roomOwner.id}, roomAdminIds = seatAdminIds, isSpeaking = seat.speaking || (seat.accountId == accountId && localVoiceSpeaking), seatSize = micSize) { handleSeatTap(seat) } }
+                                        Spacer(modifier = Modifier.width(micSize))
+                                    } else {
+                                        rowSeats.forEach { seat -> NativeSeat(seat, roomOwner.accountId.ifBlank{roomOwner.id}, roomAdminIds = seatAdminIds, isSpeaking = seat.speaking || (seat.accountId == accountId && localVoiceSpeaking), seatSize = micSize) { handleSeatTap(seat) } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+
+                // Chat page is rendered once at the root so seat-mode height changes
+                // cannot resize or clip its scrolling region.
+
+            }
+            // --- END TOP SECTION ---
+
+            
+            // --- BOTTOM SECTION (MESSAGES + INPUT/FOOTER, WITH IME PADDING) ---
+            Column(Modifier.fillMaxWidth().weight(1f).imePadding()) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    
+                    if (!showChat) {
+                        RoomChatMessages(
+                            state = chatListState,
+                            messages = messages,
+                            kickNotices = kickNotices,
+                            showOfficialAnnouncement = showOfficialAnnouncement,
+                            clearedBy = clearedBy,
+                            announcement = announcement,
+                            showRoomSettingsAnnouncementInChat = showRoomSettingsAnnouncementInChat,
+                            roomOwnerId = roomOwner.accountId.ifBlank { roomOwner.id },
+                            roomAdminIds = roomAdminIds,
+                            onSelectMessage = { selectedChatProfile = it },
+                            onSelectMention = { mention -> selectedChatProfile = NativeRoomMessage("mention-profile-${mention.accountId}", "", mention.name, "", mention.accountId) },
+                            onCopyMessage = { text ->
+                                clipboard.setText(AnnotatedString(text))
+                                roomToastText = "Copy to clipboard"
+                            }
+                        )
+                    }
+                }
+                
+                if(showChat) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(Color.White)
+                            .navigationBarsPadding()
+                            .padding(horizontal=16.dp, vertical=12.dp),
+                        verticalAlignment=Alignment.CenterVertically,
+                        horizontalArrangement=Arrangement.spacedBy(10.dp)
+                    ) {
+                        IconButton(
+                            onClick={roomImagePickerLauncher.launch("image/*")},
+                            modifier=Modifier.size(28.dp)
+                        ) {
+                            Image(
+                                painterResource(R.drawable.ic_hurry_chat_image),
+                                contentDescription="Image",
+                                modifier=Modifier.size(26.dp)
+                            )
+                        }
+                        Row(
+                            Modifier.weight(1f)
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(Color(0xFFF3F4F6))
+                                .padding(start=16.dp, end=6.dp),
+                            verticalAlignment=Alignment.CenterVertically
+                        ) {
+                            androidx.compose.foundation.text.BasicTextField(
+                                value=TextFieldValue(text=input, selection=TextRange(inputSelection.coerceIn(0, input.length))),
+                                onValueChange={ input=it.text; inputSelection=it.selection.start },
+                                singleLine=true,
+                                textStyle=androidx.compose.ui.text.TextStyle(color=Color.Black,fontSize=15.sp),
+                                cursorBrush=SolidColor(Color(0xFF3B82F6)),
+                                modifier=Modifier.weight(1f).fillMaxHeight().focusRequester(chatFocusRequester),
+                                decorationBox={innerTextField ->
+                                    Box(Modifier.fillMaxSize(), contentAlignment=Alignment.CenterStart) {
+                                        if(input.isEmpty()) Text("Type a message...",color=Color(0xFF8A8F98),fontSize=15.sp)
+                                        innerTextField()
+                                    }
+                                }
+                            )
+                            val isRoomInputBlank = input.isBlank()
+                            Box(
+                                Modifier.size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if(isRoomInputBlank) Color(0xFF9CA3AF) else Color(0xFF3B82F6))
+                                    .clickable(enabled=!isRoomInputBlank) {
+                                        if (publicMsgOff && !canSendRoomPublicMessage) {
+                                            showPublicMessageClosedToast = true
+                                        } else {
+                                        val text=input.trim()
+                                        val createdAt=System.currentTimeMillis()
+                                        val messageId="$accountId-$createdAt"
+                                        val mentions=pendingMentions.filter { text.contains("@${it.name}") }
+                                        val outgoing=NativeRoomMessage(messageId,text,roomDisplayName,roomDisplayImage,accountId,createdAt,"message",mentions)
+                                        messages.add(outgoing)
+                                        val mentionsJson=JSONArray().apply { mentions.forEach { put(JSONObject().put("accountId",it.accountId).put("name",it.name)) } }
+                                        roomSocketRef.value?.takeIf{it.connected()}?.emit(
+                                            "room_message",
+                                            JSONObject().put("id",messageId).put("roomId",roomId).put("senderId",accountId)
+                                                .put("senderAccountId",accountId).put("senderName",roomDisplayName)
+                                                .put("senderAvatar",roomDisplayImage).put("senderImage",roomDisplayImage)
+                                                .put("text",text).put("mentions",mentionsJson).put("type","message").put("createdAt",createdAt)
+                                        )
+                                        input=""; inputSelection=0
+                                        pendingMentions=emptyList()
+                                        }
+                                    },
+                                contentAlignment=Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Send,null,tint=Color.White,modifier=Modifier.size(18.dp).padding(start=2.dp))
+                            }
+                        }
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal=8.dp, vertical=6.dp).height(44.dp),verticalAlignment=Alignment.CenterVertically){
+                        Row(Modifier.weight(1f),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                            RoomFooterButton(onClick={showChat=true},description="Say Hi Chat",icon=R.drawable.ic_hurry_chat)
+                            val selfSeatIndex=seats.indexOfFirst{it.occupied && it.accountId==accountId}
+                            if(selfSeatIndex>=0) {
+                                val seat = seats[selfSeatIndex]
+                                Box(Modifier.size(42.dp).clip(CircleShape).background(Color.Black.copy(alpha=.30f)).clickable(enabled = !seat.muted){ val nextMuted = !seat.selfMuted; seats[selfSeatIndex]=seat.copy(selfMuted=nextMuted); roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId).put("userId", accountId).put("action", "self_mute").put("seatNumber", seat.number).put("isMuted", nextMuted)) },contentAlignment=Alignment.Center) {
+                                    Icon(imageVector = if (seat.muted || seat.selfMuted) Icons.Default.MicOff else Icons.Default.Mic,contentDescription = "Microphone",tint = if (seat.muted) Color.LightGray else Color.White,modifier = Modifier.size(28.dp))
+                                }
+                            }
+                            if(selfSeatIndex>=0) RoomFooterButton(onClick={showEmoji=true},description="Emoji",icon=R.drawable.ic_hurry_emoji)
+                        }
+                        AsyncImage(
+                            model="https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/file_0000000019c4821180028eebae10dbfc.png",
+                            contentDescription="Gift",
+                            modifier=Modifier.size(56.dp).clickable{showGift=true}.scale(1.1f),
+                            contentScale=ContentScale.Fit
+                        )
+                        Row(Modifier.weight(1f),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp,Alignment.End)){
+                            RoomFooterButton(onClick={showMessageSheet=true},description="Message Box Menu",icon=R.drawable.ic_hurry_mail,hasUnread=roomHasUnreadMessages)
+                            RoomFooterButton(onClick={showMenu=true},description="Apps Menu",icon=R.drawable.ic_hurry_apps)
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        // Full-page Black/50 chat layer. It is independent of the seat layout:
+        // arrow stays at the top, messages use all space down to the composer,
+        // and the transparent reserved composer slot leaves the original input
+        // row (48dp field + original padding/width) completely untouched.
+        if (showChat) {
+            Column(
+                Modifier.fillMaxSize().imePadding().zIndex(50f)
+            ) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.50f))
+                        .clickable { showChat = false; keyboardController?.hide() }
+                ) {
+                    Box(Modifier.fillMaxWidth().height(80.dp)) {
+                        IconButton(
+                            onClick = { showChat = false; keyboardController?.hide() },
+                            modifier = Modifier.align(Alignment.TopEnd).padding(top = 40.dp, end = 12.dp).size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Close room chat",
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        RoomChatMessages(
+                            state = chatListState,
+                            messages = messages,
+                            kickNotices = kickNotices,
+                            showOfficialAnnouncement = showOfficialAnnouncement,
+                            clearedBy = clearedBy,
+                            announcement = announcement,
+                            showRoomSettingsAnnouncementInChat = showRoomSettingsAnnouncementInChat,
+                            roomOwnerId = roomOwner.accountId.ifBlank { roomOwner.id },
+                            roomAdminIds = roomAdminIds,
+                            onSelectMessage = { selectedChatProfile = it },
+                            onSelectMention = { mention -> selectedChatProfile = NativeRoomMessage("mention-profile-${mention.accountId}", "", mention.name, "", mention.accountId) },
+                            onCopyMessage = { text ->
+                                clipboard.setText(AnnotatedString(text))
+                                roomToastText = "Copy to clipboard"
+                            }
+                        )
+                    }
+                }
+                // Keep the room chat composer above the black/50 chat layer.
+                Row(
+                    Modifier.fillMaxWidth().navigationBarsPadding()
+                        .background(Color.White)
+                        .padding(horizontal=16.dp, vertical=12.dp)
+                        .zIndex(51f),
+                    verticalAlignment=Alignment.CenterVertically,
+                    horizontalArrangement=Arrangement.spacedBy(10.dp)
+                ) {
+                    IconButton(onClick={roomImagePickerLauncher.launch("image/*")}, modifier=Modifier.size(28.dp)) {
+                        Image(painterResource(R.drawable.ic_hurry_chat_image), contentDescription="Image", modifier=Modifier.size(26.dp))
+                    }
+                    Row(
+                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(24.dp))
+                            .background(Color(0xFFF3F4F6)).padding(start=16.dp, end=6.dp),
+                        verticalAlignment=Alignment.CenterVertically
+                    ) {
+                        androidx.compose.foundation.text.BasicTextField(
+                            value=TextFieldValue(text=input, selection=TextRange(inputSelection.coerceIn(0, input.length))),
+                            onValueChange={ input=it.text; inputSelection=it.selection.start },
+                            singleLine=true,
+                            textStyle=androidx.compose.ui.text.TextStyle(color=Color.Black,fontSize=15.sp),
+                            cursorBrush=SolidColor(Color(0xFF3B82F6)),
+                            modifier=Modifier.weight(1f).fillMaxHeight().focusRequester(chatFocusRequester),
+                            decorationBox={innerTextField ->
+                                Box(Modifier.fillMaxSize(), contentAlignment=Alignment.CenterStart) {
+                                    if(input.isEmpty()) Text("Type a message...",color=Color(0xFF8A8F98),fontSize=15.sp)
+                                    innerTextField()
+                                }
+                            }
+                        )
+                        val isRoomInputBlank = input.isBlank()
+                        Box(
+                            Modifier.size(36.dp).clip(CircleShape)
+                                .background(if(isRoomInputBlank) Color(0xFF9CA3AF) else Color(0xFF3B82F6))
+                                .clickable(enabled=!isRoomInputBlank) {
+                                    if (publicMsgOff && !canSendRoomPublicMessage) {
+                                        showPublicMessageClosedToast = true
+                                    } else {
+                                        val text=input.trim()
+                                        val createdAt=System.currentTimeMillis()
+                                        val messageId="$accountId-$createdAt"
+                                        val mentions=pendingMentions.filter { text.contains("@${it.name}") }
+                                        val outgoing=NativeRoomMessage(messageId,text,roomDisplayName,roomDisplayImage,accountId,createdAt,"message",mentions)
+                                        messages.add(outgoing)
+                                        val mentionsJson=JSONArray().apply { mentions.forEach { put(JSONObject().put("accountId",it.accountId).put("name",it.name)) } }
+                                        roomSocketRef.value?.takeIf{it.connected()}?.emit(
+                                            "room_message",
+                                            JSONObject().put("id",messageId).put("roomId",roomId).put("senderId",accountId)
+                                                .put("senderAccountId",accountId).put("senderName",roomDisplayName)
+                                                .put("senderAvatar",roomDisplayImage).put("senderImage",roomDisplayImage)
+                                                .put("text",text).put("mentions",mentionsJson).put("type","message").put("createdAt",createdAt)
+                                        )
+                                        input=""; inputSelection=0
+                                        pendingMentions=emptyList()
+                                    }
+                                },
+                            contentAlignment=Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Send,null,tint=Color.White,modifier=Modifier.size(18.dp).padding(start=2.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        val sideBannerImages = listOf(
+            "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261018_165235.png",
+            "https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/1788339681679~2.jpg"
+        )
+        val sideBannerPager = androidx.compose.foundation.pager.rememberPagerState(pageCount = { sideBannerImages.size })
+        LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(3000); if (!sideBannerPager.isScrollInProgress) sideBannerPager.animateScrollToPage((sideBannerPager.currentPage + 1) % sideBannerImages.size) } }
+
+        // BOTTOM RIGHT CORNER (Task Image Reverted back here)
+        Column(modifier=Modifier.align(Alignment.BottomEnd).padding(end=10.dp, bottom=68.dp).heightIn(max=380.dp).verticalScroll(rememberScrollState()),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(2.dp)) {
+            if (showFloatingLuckyBag) {
+                AsyncImage(
+                    model = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261021_170707.png",
+                    contentDescription = "Lucky Bag Sent",
+                    modifier = Modifier
+                        .padding(bottom = 6.dp)
+                        .size(62.dp)
+                        .clickable { 
+                            showLuckyBagCenterReveal = true
+                            showFloatingLuckyBag = false 
+                        },
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            Column(horizontalAlignment=Alignment.CenterHorizontally, modifier = Modifier.offset(y = 6.dp)) {
+                androidx.compose.foundation.pager.HorizontalPager(state = sideBannerPager,modifier = Modifier.size(58.dp, 80.dp).clip(RoundedCornerShape(8.dp))) { page ->
+                    AsyncImage(model = sideBannerImages[page],contentDescription = "Room side banner",modifier = Modifier.fillMaxSize().clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { if (page == 0) { keepingRoomForMini = true; onRoomSupport() } },contentScale = ContentScale.Crop)
+                }
+                Row(horizontalArrangement=Arrangement.spacedBy(2.dp), verticalAlignment=Alignment.CenterVertically, modifier=Modifier.padding(top=4.dp)) {
+                    repeat(sideBannerImages.size) { i ->
+                        val isActive = sideBannerPager.currentPage == i
+                        Box(Modifier.size(if (isActive) 6.dp else 4.dp).clip(CircleShape).background(if (isActive) Color.White else Color.White.copy(alpha=.4f)))
+                    }
+                }
+            }
+            
+            // Task Image reverted back to bottom right above games
+            TransparentGreenImage(url="https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/IMG-20260902-WA0066.jpg",modifier=Modifier.offset(y = 12.dp).padding(top=2.dp).size(60.dp).clickable { showRoomTask=true })
+            AsyncImage(model="https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/file_000000002a8c81fab8232bebeeeb45cc.png",contentDescription="Games",modifier=Modifier.size(56.dp).clickable { showGames=true },contentScale=ContentScale.Fit)
+        }
+        
+        RoomPageBlock {
+Column(Modifier.align(Alignment.BottomStart).padding(bottom=LocalConfiguration.current.screenHeightDp.dp*0.33f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            entryToasts.toList().forEach { toast ->
+                key(toast.id) {
+                    val visibleState = remember { androidx.compose.animation.core.MutableTransitionState(false).apply { targetState = true } }
+                    AnimatedVisibility(
+                        visibleState = visibleState, 
+                        enter=slideInHorizontally(initialOffsetX={ _ -> screenWidthPx }, animationSpec = tween(durationMillis = 800, easing = LinearOutSlowInEasing)) + fadeIn(animationSpec = tween(800))
+                    ) {
+                        // Blue banner - thoda transparent mix aur full username dikhane ke liye weight(1f) add kiya hai
+                        Row(Modifier.fillMaxWidth(0.80f).clip(RoundedCornerShape(topStart=50.dp,bottomStart=50.dp,topEnd=0.dp,bottomEnd=0.dp)).background(Brush.horizontalGradient(listOf(Color(0xCC2563EB),Color(0x802563EB),Color.Transparent))).padding(start=10.dp,end=10.dp,top=2.dp,bottom=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                            FallbackAsyncImage(model=toast.image,contentDescription=toast.name,modifier=Modifier.size(24.dp).clip(CircleShape),contentScale=ContentScale.Crop)
+                            Text(toast.name,color=Color.White,fontSize=13.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,maxLines=1,modifier=Modifier.weight(1f, fill=false))
+                            Text("Enter the Room",color=Color.White,fontSize=12.sp,fontWeight=FontWeight.Bold,maxLines=1)
+                            if (toast.vehicleVideo.isNotBlank()) {
+                                val vehicleUrl = if (toast.vehicleVideo.startsWith("http", true)) toast.vehicleVideo else "https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/" + toast.vehicleVideo
+                                val vehicleItemId = toast.vehicleItemId.ifBlank { when {
+                                    toast.vehicleVideo.contains("VID_20260905_095157_269_bsl.mp4", true) -> "v1"
+                                    toast.vehicleVideo.contains("Screenrecorder-2026-10-23-16-01-27-317~2.mp4", true) -> "v10"
+                                    toast.vehicleVideo.contains("alioss_19_2025090317293759938~2.mp4", true) -> "v2"
+                                    toast.vehicleVideo.contains("alioss_19_2025120517555513292~2.mp4", true) -> "v3"
+                                    toast.vehicleVideo.contains("alioss_19_2025121720314422497~2.mp4", true) -> "v4"
+                                    toast.vehicleVideo.contains("alioss_19_2026021110563339968~2.mp4", true) -> "v5"
+                                    toast.vehicleVideo.contains("alioss_16_2025092202374953873~2.mp4", true) -> "v6"
+                                    toast.vehicleVideo.contains("alioss_16_2025080802251364763~2.mp4", true) -> "v7"
+                                    toast.vehicleVideo.contains("alioss_16_2025092202291646319~2.mp4", true) -> "v8"
+                                    toast.vehicleVideo.contains("alioss_17_2025041211424496804~2.mp4", true) -> "v9"
+                                    else -> ""
+                                } }
+                                val isV1 = vehicleItemId == "v1"
+                                val topFade = when (vehicleItemId) {
+                                    "v10" -> 0.05f
+                                    "v9", "v7", "v6" -> 0.15f
+                                    else -> 0.10f
+                                }
+                                val bottomFade = when (vehicleItemId) {
+                                    "v10" -> 0.05f
+                                    "v2", "v4", "v6" -> 0.15f
+                                    "v9", "v7" -> 0f
+                                    else -> 0.10f
+                                }
+                                StoreVideoPreview(
+                                    url = vehicleUrl,
+                                    modifier = Modifier.width(100.dp).wrapContentHeight(),
+                                    pause = false,
+                                    topFade = topFade,
+                                    bottomFade = bottomFade,
+                                    removeGreenScreen = isV1,
+                                    mute = false
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        RoomPageBlock {
+if (miniMusicTrack != null && !musicControllerMinimized && !MusicPlaybackState.isMusicPageOpen && MusicPlaybackState.wasPlayedOnMusicPage && MusicPlaybackState.musicPageBackPressed) {
+            val track = miniMusicTrack!!
+            Box(
+                Modifier.align(Alignment.BottomCenter)
+                    .zIndex(10f)
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = 60.dp)
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF171D1B))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    if (showMusicVolumeView) {
+                        Box(Modifier.fillMaxWidth().height(30.dp), contentAlignment = Alignment.Center) {
+                            IconButton(onClick = { showMusicVolumeView = false }, modifier = Modifier.align(Alignment.CenterStart).size(30.dp)) {
+                                Icon(Icons.Default.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(18.dp))
+                            }
+                            Text("Volume", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Normal)
+                        }
+                        Spacer(Modifier.height(28.dp))
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.VolumeMute, "Open music page", tint = Color.White,
+                                modifier = Modifier.size(21.dp).clickable {
+                                    showMusicVolumeView = false
+                                    musicControllerMinimized = true
+                                    MusicPlaybackState.isMusicPageOpen = true
+                                })
+                            Spacer(Modifier.width(12.dp))
+                            ThickBar(progress = musicVolume, height = 6.dp, activeColor = Color.White,
+                                inactiveColor = Color.White.copy(alpha = 0.42f), modifier = Modifier.weight(1f),
+                                onProgressChange = { value ->
+                                    musicVolume = value
+                                    runCatching { appContext.startService(Intent(appContext, RoomMusicService::class.java)
+                                        .setAction(RoomMusicService.ACTION_VOLUME).putExtra(RoomMusicService.EXTRA_VOLUME, value)) }
+                                })
+                            Spacer(Modifier.width(12.dp))
+                            Icon(Icons.Default.VolumeUp, "Volume up", tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
+                        Spacer(Modifier.height(28.dp))
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { musicClose() }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Default.PowerSettingsNew, "Stop music", tint = Color.White, modifier = Modifier.size(25.dp))
+                            }
+                            IconButton(onClick = { musicControllerMinimized = true }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Default.CloseFullscreen, "Minimize", tint = Color.White, modifier = Modifier.size(22.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(track.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Normal, maxLines = 1,
+                            overflow = TextOverflow.Clip, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE))
+                        Spacer(Modifier.height(5.dp))
+                        val progressFraction = if (musicDuration > 0f) (musicCurrentTime / musicDuration).coerceIn(0f, 1f) else 0f
+                        ThickBar(progress = progressFraction, height = 5.dp, activeColor = Color.White,
+                            inactiveColor = Color.White.copy(alpha = 0.48f), modifier = Modifier.fillMaxWidth(),
+                            onProgressChange = { value ->
+                                if (musicDuration > 0f) {
+                                    musicCurrentTime = value * musicDuration
+                                    runCatching { appContext.startService(Intent(appContext, RoomMusicService::class.java)
+                                        .setAction(RoomMusicService.ACTION_SEEK)
+                                        .putExtra(RoomMusicService.EXTRA_POSITION_MS, (musicCurrentTime * 1000f).toInt())) }
+                                }
+                            })
+                        Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(formatMusicTime(musicCurrentTime), color = Color.White.copy(alpha = .7f), fontSize = 9.sp, fontWeight = FontWeight.Normal)
+                            Text(formatMusicTime(musicDuration), color = Color.White.copy(alpha = .7f), fontSize = 9.sp, fontWeight = FontWeight.Normal)
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.VolumeUp, "Volume", tint = Color.White, modifier = Modifier.size(21.dp))
+                            ThickBar(
+                                progress = musicVolume,
+                                height = 8.dp,
+                                activeColor = Color(0xFF3B82F6),
+                                inactiveColor = Color.White.copy(alpha = 0.20f),
+                                modifier = Modifier.weight(1f),
+                                onProgressChange = { value ->
+                                    musicVolume = value
+                                    runCatching {
+                                        appContext.startService(Intent(appContext, RoomMusicService::class.java)
+                                            .setAction(RoomMusicService.ACTION_VOLUME)
+                                            .putExtra(RoomMusicService.EXTRA_VOLUME, value))
+                                    }
+                                }
+                            )
+                            Box(Modifier.size(42.dp).clip(CircleShape).background(Color.White).clickable { musicPlayPause() }, contentAlignment = Alignment.Center) {
+                                Icon(if (isMusicPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    if (isMusicPlaying) "Pause" else "Play", tint = Color(0xFF202938), modifier = Modifier.size(25.dp))
+                            }
+                            IconButton(onClick = { musicNext() }, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Default.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(27.dp))
+                            }
+                            Box(Modifier.size(30.dp).clickable { musicReplayOne() }, contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.RepeatOne, "Repeat current song",
+                                    tint = if (repeatOneEnabled) Color(0xFF3B82F6) else Color.White,
+                                    modifier = Modifier.size(25.dp))
+                            }
+                            Icon(Icons.Default.QueueMusic, "Open Music page", tint = Color.White,
+                                modifier = Modifier.size(25.dp).clickable {
+                                    musicControllerMinimized = true
+                                    openMusicPageFromController = true
+                                    showMenu = true
+                                })
+                        }
+                    }
+                }
+            }
+        }
+        }
+        if(showExitMenu) RoomExitMenu(
+            onKeep={keepingRoomForMini=true;showExitMenu=false;onKeepRoom(roomName,roomImage,roomId)},
+            onExit={showExitMenu=false;onClose()},
+            onDismiss={showExitMenu=false}
+        )
+        if(showMenu) Fourgride(
+            openMusicPageRequest = openMusicPageFromController,
+            onClose={showMenu=false},
+            onClearChat={
+                messages.clear()
+                kickNotices.clear()
+                showRoomSettingsAnnouncementInChat = false
+                appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("announcement_chat_visible_$roomId", false).apply()
+                roomToastText = "Public message are cleared"
+                showOfficialAnnouncement = false
+                // Keep the Room Settings announcement; this action only clears chat messages.
+                val clearerName = roomDisplayName.ifBlank { "User" }
+                clearedBy = clearerName
+                roomSocketRef.value?.emit("room_clear_chat",JSONObject().put("roomId",roomId).put("userId",accountId).put("userName",clearerName).put("timestamp",System.currentTimeMillis()))
+                showMenu=false
+            },
+            publicMsgOff=publicMsgOff,
+            isRoomOwner=isRoomOwner || currentUserSeatIds.any { it in roomAdminIds },
+            onTogglePublicMsg={
+                if (isRoomOwner || currentUserSeatIds.any { it in roomAdminIds }) {
+                    publicMsgOff = !publicMsgOff
+                    roomSocketRef.value?.takeIf { it.connected() }?.emit("room_settings_update", JSONObject()
+                        .put("roomId", roomId).put("userId", accountId).put("publicMsgOff", publicMsgOff))
+                }
+            },
+            speaker=speaker,
+            onToggleSpeaker={speaker=!speaker},
+            onMusicPlaylistChanged={ tracks ->
+                musicPlaylist = tracks
+                MusicPlaybackState.playlist = tracks
+                val selectedUri = miniMusicTrack?.url ?: MusicPlaybackState.currentPlayingUri
+                val selectedIndex = tracks.indexOfFirst { it.url == selectedUri }
+                if (selectedIndex >= 0) currentTrackIndex = selectedIndex
+            },
+            onMusicPlay={ track ->
+                miniMusicTrack = track
+                MusicPlaybackState.wasPlayedOnMusicPage = true
+                MusicPlaybackState.musicPageBackPressed = false
+                if (musicPlaylist.none { it.url == track.url }) musicPlaylist = listOf(track)
+                currentTrackIndex = musicPlaylist.indexOfFirst { it.url == track.url }.coerceAtLeast(0)
+                musicCurrentTime = 0f
+                musicDuration = if (track.duration > 0) track.duration / 1000f else 180f
+                isMusicPlaying = true
+                MusicPlaybackState.currentPlayingUri = track.url
+                MusicPlaybackState.currentTrack = track
+                MusicPlaybackState.isPlaying = true
+                musicControllerMinimized = false
+            },
+            onMusicPlaybackChanged={ track, playing ->
+                miniMusicTrack = track
+                isMusicPlaying = playing
+                MusicPlaybackState.currentPlayingUri = track.url
+                MusicPlaybackState.currentTrack = track
+                MusicPlaybackState.isPlaying = playing
+            },
+            onMusicMinimize={ track ->
+                openMusicPageFromController = false
+                if (track != null) {
+                    miniMusicTrack = track
+                    MusicPlaybackState.musicPageBackPressed = MusicPlaybackState.wasPlayedOnMusicPage && MusicPlaybackState.isPlaying
+                    MusicPlaybackState.isMusicPageOpen = false
+                    musicControllerMinimized = false
+                } else {
+                    MusicPlaybackState.musicPageBackPressed = false
+                    musicControllerMinimized = false
+                }
+                showMenu = false
+            },
+            onOpenStore={ view ->
+                storeInitialView = if (view.equals("bag", true)) "bag" else "store"
+                showStore = true
+                showMenu = false
+            },
+            luckyBagSenderId = canonicalWalletUserId,
+            luckyBagSenderName = roomDisplayName.ifBlank { "User" },
+            luckyBagSenderImage = roomDisplayImage,
+            luckyBagRoomId = roomId,
+            luckyBagRoomName = roomName,
+            onLuckyBagSent={ name, image, amount, recipients, bagId ->
+                luckyBagSenderName = name
+                luckyBagSenderImage = image
+                luckyBagId = bagId
+                luckyBagClaimAmount = amount
+                showFloatingLuckyBag = false
+            }
+        )
+        
+        val roomFollowers = followedRoomUsers.filter { it.accountId != roomOwner.accountId && it.accountId != roomOwner.id }
+        if(showStore) StorePage(onBack={showStore=false}, initialView=storeInitialView, userId=accountId.ifBlank{roomOwner.accountId.ifBlank{roomOwner.id}})
+        if(showInfo) RoomInfo(
+            isOpen=true,
+            onClose={showInfo=false},
+            isRoomOwner=accountId==roomOwner.accountId.ifBlank{roomOwner.id},
+            roomOwner=RoomInfoOwner(id=roomOwner.id,uid=roomOwner.uid,accountId=roomOwner.accountId,name=roomOwner.name,image=roomOwner.image),
+            roomData=RoomInfoData(roomName,roomImage,announcement,roomId),
+            roomFollowers=roomFollowers,
+            roomAdmins=roomAdminUsers,
+            onOpenProfile={ follower -> selectedChatProfile=NativeRoomMessage("member-profile-" + follower.accountId,"",follower.name,follower.image,follower.accountId);showInfo=false },
+            onOpenOwnerChat={ owner ->
+                val ownerChatId = owner.accountId.trim()
+                if (ownerChatId.isNotBlank() && ownerChatId != accountId) {
+                    selectedOfficialChat = Triple(ownerChatId, owner.name.ifBlank { "Room Owner" }, owner.image)
+                    showInfo = false
+                    showMessageSheet = false
+                    showMenu = false
+                }
+            },
+            onCopyId={ id -> clipboard.setText(AnnotatedString(id));copiedId=id },
+            copied=copiedId==roomId,
+            currentUserId=accountId,
+            isRoomFollowed=followed,
+            onToggleRoomFollow={ next ->
+                if (accountId.isNotBlank() && accountId != "guest" && accountId != roomId) {
+                    val previousFollowState = followed
+                    followed = next
+                    onFollowToggle(roomId,next)
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val result = runCatching {
+                            val encodedUser=java.net.URLEncoder.encode(accountId,"UTF-8")
+                            val encodedRoom=java.net.URLEncoder.encode(roomId,"UTF-8")
+                            val url=if(next) java.net.URL("https://zyora-server.onrender.com/api/room-follows") else java.net.URL("https://zyora-server.onrender.com/api/room-follows?userId=$encodedUser&roomId=$encodedRoom")
+                            val conn=(url.openConnection() as java.net.HttpURLConnection).apply {
+                                requestMethod=if(next) "POST" else "DELETE"
+                                connectTimeout=8000; readTimeout=8000
+                                if(next) { doOutput=true; setRequestProperty("Content-Type","application/json") }
+                            }
+                            try {
+                                if(next) {
+                                    val payload=JSONObject().put("userId",accountId).put("roomId",roomId)
+                                        .put("roomName",roomName).put("roomImage",roomImage).put("roomCountry",roomOwner.country)
+                                        .put("followerName",roomDisplayName).put("followerImage",roomDisplayImage)
+                                        .put("followerCountry",cachedCurrentProfile?.optString("country").orEmpty())
+                                    conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                                }
+                                if(conn.responseCode !in 200..299) error("Room follow update failed")
+                            } finally { conn.disconnect() }
+                        }
+                        if (result.isFailure) {
+                            android.util.Log.e("ZyoraRoomFollow","Room follow update failed",result.exceptionOrNull())
+                            withContext(Dispatchers.Main) {
+                                followed = previousFollowState
+                                android.widget.Toast.makeText(appContext, "Room follow update failed. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            },
+            onShareToUser={ fan ->
+                pendingRoomInvitationJson=JSONObject().put("roomId",roomId).put("roomName",roomName)
+                    .put("roomDp",roomImage).put("roomOwnerId",roomOwner.accountId.ifBlank{roomOwner.id})
+                    .put("roomIdText",roomId).put("inviteId",java.util.UUID.randomUUID().toString()).toString()
+                selectedOfficialChat=Triple(fan.accountId,fan.name,fan.image)
+                showInfo=false
+            }
+        )
+        if(showActiveUsers) ActiveUsers(isOpen=true,onClose={showActiveUsers=false},roomUsers=activeRoomUsers,roomOwnerId=roomOwner.accountId.ifBlank{roomOwner.id},roomAdminIds=roomAdminIds,onOpenProfile={ user -> selectedChatProfile=NativeRoomMessage("active-profile-" + user.accountId,"",user.name,user.image,user.accountId);showActiveUsers=false },onCopyUserId={ id -> clipboard.setText(AnnotatedString(id));copiedId=id })
+        if(showSeatInviteUsers) ActiveUsers(
+            isOpen=true,
+            onClose={showSeatInviteUsers=false},
+            roomUsers=activeRoomUsers.filter { it.accountId != accountId },
+            roomOwnerId=roomOwner.accountId.ifBlank{roomOwner.id},
+            roomAdminIds=roomAdminIds,
+            onOpenProfile={},
+            onCopyUserId={},
+            inviteMode=true,
+            onInvite={ user ->
+                val inviteSeat=seats.firstOrNull { !it.occupied && !it.locked }
+                val socket=roomSocketRef.value
+                if(user.accountId.isNotBlank() && user.accountId != accountId && inviteSeat != null && socket?.connected()==true) {
+                    socket.emit("room_seat_invite_send", JSONObject()
+                        .put("roomId",roomId)
+                        .put("inviterId",accountId)
+                        .put("inviterName",roomDisplayName.ifBlank{"User"})
+                        .put("inviterImage",roomDisplayImage)
+                        .put("targetId",user.accountId)
+                        .put("seatNumber",inviteSeat.number))
+                    showSeatInviteUsers=false
+                } else if(inviteSeat==null) {
+                    android.widget.Toast.makeText(appContext,"No available unlocked seat",android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(appContext,"Unable to send invitation",android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+        if(showSettings && accountId.isNotBlank() && accountId == roomOwner.accountId.ifBlank { roomOwner.id }) RoomSettingPage(initial = RoomSettingsDataNative(roomName=roomName,roomDp=roomImage,announcement=announcement,micMode=roomMicMode,theme=roomTheme,isLocked=locked,roomPassword=roomPassword,admin=roomAdminIds,customTheme=appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).getString("customTheme_$roomId", "").orEmpty()),roomOwnerId=roomId,currentUserId=accountId,roomMembers=followedRoomUsers,onBack={showSettings=false},onSave={saved->
+            val newlyAddedAdminId = saved.admin.firstOrNull { it !in roomAdminIds }
+            val newlyAddedAdminName = newlyAddedAdminId?.let { id ->
+                followedRoomUsers.firstOrNull { it.accountId == id }?.name
+                    ?: roomAdminUsers.firstOrNull { it.accountId == id }?.name
+                    ?: activeRoomUsers.firstOrNull { it.accountId == id }?.name
+                    ?: id
+            }.orEmpty()
+            roomName=saved.roomName;roomImage=saved.roomDp;announcement=saved.announcement;showRoomSettingsAnnouncementInChat=saved.announcement.isNotBlank();appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("announcement_chat_visible_$roomId", showRoomSettingsAnnouncementInChat).apply();roomMicMode=saved.micMode;roomTheme=saved.theme;roomCustomThemeUrl=saved.customTheme;roomAdminIds=saved.admin;locked=saved.isLocked;roomPassword=saved.roomPassword
+            appContext.getSharedPreferences("room_settings", android.content.Context.MODE_PRIVATE).edit().putInt("micMode_$roomId", saved.micMode).putString("theme_$roomId", saved.theme).putString("customTheme_$roomId", saved.customTheme).putBoolean("room_locked_$roomId", saved.isLocked).putString("room_password_$roomId", saved.roomPassword).apply()
+            CoroutineScope(Dispatchers.IO).launch { NativeIndexDatabase(appContext).saveRoomLock(roomId, saved.isLocked, saved.roomPassword) }
+            roomSocketRef.value?.takeIf { it.connected() }?.emit("room_settings_update", JSONObject()
+                .put("roomId", roomId).put("userId", accountId).put("roomOwnerId", roomId)
+                .put("micMode", saved.micMode).put("roomName", saved.roomName).put("roomDp", saved.roomDp)
+                .put("announcement", saved.announcement).put("theme", saved.theme)
+                 .put("customTheme", saved.customTheme)
+                .put("admin", JSONArray(saved.admin))
+                .put("addedAdminId", newlyAddedAdminId ?: "")
+                .put("addedAdminName", newlyAddedAdminName)
+                .put("actorId", accountId)
+                .put("actorName", latestRoomDisplayName.ifBlank { "Room Owner" })
+                .put("actorImage", latestRoomDisplayImage)
+                .put("isLocked", saved.isLocked)
+                .put("updatedAt", System.currentTimeMillis()))
+        })
+        if(showGift) GiftPicker(
+            open = true,
+            onClose = { showGift = false },
+            seats = seats.toList(),
+            roomId = roomId,
+            currentUserAccountId = accountId,
+            currentUserName = roomDisplayName,
+            currentUserImage = roomDisplayImage,
+            roomUsers = activeRoomUsers,
+            walletBalance = roomWalletBalance,
+            onDebitWallet = { requested -> if (requested <= roomWalletBalance) roomWalletBalance else null },
+            onSendCoinTransfer = { transfer -> roomSocketRef.value?.emit("coin_transfer", JSONObject(transfer)) }
+        )
+        if(showGames) GamesSheet(onClose={showGames=false},onWildParty={showGames=false;showWildParty=true},onFruitParty={showGames=false;showFruitParty=true})
+        if(showRoomTask) Roomtask(onBack={showRoomTask=false})
+        if(showWildParty) Wildparty(onClose={showWildParty=false},onMinimize={showWildParty=false})
+        if(showFruitParty) Fruitparty(onClose={showFruitParty=false},onMinimize={showFruitParty=false})
+        if(showEmoji) EmojiPicker(onClose={showEmoji=false},onSelectEmoji={ sticker ->
+            val seatIndex=seats.indexOfFirst{it.occupied && it.accountId==accountId}
+            if(seatIndex>=0){
+                val timestamp=System.currentTimeMillis()
+                val selected=seats[seatIndex]
+                val videoUrl = sticker.videoUrl?.takeIf { it.isNotBlank() }
+                val seatMediaUrl = videoUrl ?: sticker.src
+                seats[seatIndex]=selected.copy(
+                    gifSrc=if (videoUrl != null) videoUrl else sticker.src,
+                    gifTimestamp=timestamp
+                )
+                roomSocketRef.value?.emit("room_seat_action",JSONObject().put("roomId",roomId).put("userId",accountId).put("action","emoji").put("seatNumber",selected.number).put("user",JSONObject().put("name",roomDisplayName.ifBlank{"User"}).put("image",roomDisplayImage.ifBlank{"https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/default-avatar.png"}).put("accountId",accountId)).put("src",seatMediaUrl).put("timestamp",timestamp))
+                
+                Handler(Looper.getMainLooper()).postDelayed({ if(seats.getOrNull(seatIndex)?.gifTimestamp==timestamp) seats[seatIndex]=seats[seatIndex].copy(gifSrc="",gifTimestamp=0L) },5000)
+            }
+        })
+        selectedChatProfile?.let { profileMessage ->
+            val profileId = profileMessage.senderAccountId
+            RoomProfile(
+                user = RoomUser(
+                    id = profileId, uid = profileId, accountId = profileId,
+                    name = profileMessage.sender.ifBlank { "User" }, image = profileMessage.senderImage,
+                    isInSeat = seats.any { it.occupied && it.accountId == profileId },
+                    isMuted = seats.firstOrNull { it.occupied && it.accountId == profileId }?.muted ?: false,
+                    isLocked = seats.firstOrNull { it.occupied && it.accountId == profileId }?.locked ?: false
+                ),
+                isCurrentUser = profileId == accountId,
+                isRoomOwner = profileId == roomOwner.accountId.ifBlank { roomOwner.id },
+                canModerate = currentUserSeatIds.any { it == roomId || it == roomOwnerAccountId || it in roomAdminIds },
+                onClose = { selectedChatProfile = null },
+                onOpenPublicProfile = { profile -> selectedChatProfile = null; selectedSeat = 0; showSeatSheet = false; keepingRoomForMini = true; onOpenPublicProfile(profile) },
+                onCopyId = { if (profileId.isNotBlank()) clipboard.setText(AnnotatedString(profileId)) },
+                onMention = { name, targetId ->
+                    val cleanName = name.trim().ifBlank { "User" }
+                    run {
+                        val cursor = inputSelection.coerceIn(0, input.length)
+                        val insertion = (if (cursor > 0 && !input[cursor - 1].isWhitespace()) " " else "") + "@$cleanName "
+                        input = input.substring(0, cursor) + insertion + input.substring(cursor)
+                        inputSelection = cursor + insertion.length
+                    }
+                    if (targetId.isNotBlank()) pendingMentions = (pendingMentions.filterNot { it.accountId == targetId } + NativeMention(targetId, cleanName))
+                    showChat = true
+                    selectedChatProfile = null
+                },
+                onFollow = { if (profileId.isNotBlank()) onFollowToggle(profileId, true) },
+                onMessage = {
+                    if (profileId.isNotBlank() && profileId != accountId) {
+                        selectedOfficialChat = Triple(profileId, profileMessage.sender, profileMessage.senderImage)
+                        selectedChatProfile = null
+                    }
+                },
+                onInvite = {
+                    val inviteSeat = seats.firstOrNull { !it.occupied && !it.locked }
+                    val socket = roomSocketRef.value
+                    if (profileId.isNotBlank() && profileId != accountId && inviteSeat != null && socket?.connected() == true) {
+                        socket.emit(
+                            "room_seat_invite_send",
+                            JSONObject()
+                                .put("roomId", roomId)
+                                .put("inviterId", accountId)
+                                .put("inviterName", roomDisplayName.ifBlank { "User" })
+                                .put("inviterImage", roomDisplayImage)
+                                .put("targetId", profileId)
+                                .put("seatNumber", inviteSeat.number)
+                        )
+                        selectedChatProfile = null
+                    }
+                },
+                onLeaveSeat = {
+                    val index = seats.indexOfFirst { it.occupied && it.accountId == profileId }
+                    if (index >= 0) {
+                        val seatNumber = seats[index].number
+                        seats[index] = NativeRoomSeat(number = seatNumber)
+                        roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId).put("userId", accountId).put("targetUserId", profileId).put("action", "leave").put("seatNumber", seatNumber))
+                    }
+                    selectedChatProfile = null
+                },
+                onMute = {
+                    val index = seats.indexOfFirst { it.occupied && it.accountId == profileId }
+                    if (index >= 0 && (accountId == roomOwner.accountId || accountId == roomOwner.id || accountId == roomOwner.uid || accountId == roomId || roomAdminIds.any { it.trim() in currentUserSeatIds })) {
+                        val nextMuted = !seats[index].muted
+                        seats[index] = seats[index].copy(muted = nextMuted)
+                        roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId).put("userId", accountId).put("action", "owner_mute").put("seatNumber", seats[index].number).put("isMuted", nextMuted))
+                    }
+                },
+                onLock = {
+                    val index = seats.indexOfFirst { it.occupied && it.accountId == profileId }
+                    if (index >= 0 && (accountId == roomOwner.accountId || accountId == roomOwner.id || accountId == roomOwner.uid || accountId == roomId || roomAdminIds.any { it.trim() in currentUserSeatIds })) {
+                        val seatNumber = seats[index].number
+                        val nextLocked = !seats[index].locked
+                        seats[index] = if (nextLocked) NativeRoomSeat(number = seatNumber, locked = true)
+                            else seats[index].copy(locked = false)
+                        roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId).put("userId", accountId).put("action", "lock").put("seatNumber", seatNumber).put("isLocked", nextLocked))
+                    }
+                },
+                onKickOut = { selectedTime ->
+                    val durationMs = when (selectedTime) {
+                        "15 minutes" -> 15L * 60_000L
+                        "30 minutes" -> 30L * 60_000L
+                        "2 hours" -> 2L * 60L * 60_000L
+                        "24 hours" -> 24L * 60L * 60_000L
+                        else -> 30L * 60_000L
+                    }
+                    roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId)
+                        .put("userId", accountId).put("action", "kick").put("targetUserId", profileId)
+                        .put("durationMs", durationMs).put("targetName", profileMessage.sender)
+                        .put("targetImage", profileMessage.senderImage)
+                        .put("actorName", roomDisplayName).put("actorImage", roomDisplayImage)
+                        .put("actorRole", if (currentUserSeatIds.any { it in roomAdminIds }) "admin" else "owner")
+                        .put("ownerName", roomDisplayName).put("ownerImage", roomDisplayImage))
+                    selectedChatProfile = null
+                }
+            )
+        }
+        if(showSeatSheet && selectedSeat>0) {
+            val seatIndex = seats.indexOfFirst { it.number == selectedSeat }
+            val seat = seats.getOrNull(seatIndex)
+            val isRoomOwner = accountId.isNotBlank() &&
+                currentUserSeatIds.any { it in setOf(roomOwner.accountId, roomOwner.id, roomOwner.uid, roomId).map(String::trim) }
+            val isRoomAdmin = accountId.isNotBlank() &&
+                roomAdminIds.any { it.trim() in currentUserSeatIds }
+            if(seat!=null && (isRoomOwner || isRoomAdmin)) SeatActionSheet(
+                seat=seat,
+                isOwner=isRoomOwner || isRoomAdmin,
+                isMySeat=seat.occupied && seat.accountId==accountId,
+                onDismiss={showSeatSheet=false;selectedSeat=0},
+                onTake={
+                    if(!seat.occupied && !seat.locked) {
+                        val user = JSONObject().put("name",roomDisplayName.ifBlank{"User"}).put("image",roomDisplayImage.ifBlank{"https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/default-avatar.png"}).put("accountId",accountId)
+                        if(seatIndex>=0) seats[seatIndex]=seat.copy(occupied=true,userName=roomDisplayName.ifBlank{"User"},userImage=roomDisplayImage.ifBlank { "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/default-avatar.png" },accountId=accountId,muted=false,locked=false)
+                        roomSocketRef.value?.emit("room_seat_action",JSONObject().put("roomId",roomId).put("userId",accountId).put("action","take").put("seatNumber",seat.number).put("user",user))
+                        showSeatSheet=false;selectedSeat=0
+                    }
+                },
+                onLeave={
+                    if(seatIndex>=0) seats[seatIndex]=NativeRoomSeat(number=seat.number)
+                    roomSocketRef.value?.emit("room_seat_action",JSONObject().put("roomId",roomId).put("userId",accountId).put("action","leave").put("seatNumber",seat.number))
+                    showSeatSheet=false;selectedSeat=0
+                },
+                onMute={
+                    val nextMuted=!seat.muted
+                    if(seatIndex>=0) seats[seatIndex]=seat.copy(muted=nextMuted)
+                    roomSocketRef.value?.emit("room_seat_action",JSONObject().put("roomId",roomId).put("userId",accountId).put("action","owner_mute").put("seatNumber",seat.number).put("isMuted",nextMuted))
+                    showSeatSheet=false;selectedSeat=0
+                },
+                onLock={
+                    if(isRoomOwner || isRoomAdmin) {
+                        // Read the latest seat state at tap time; the sheet's captured
+                        // seat can be stale after a room_seats broadcast.
+                        val currentSeat = seats.getOrNull(seatIndex)
+                        if (currentSeat != null) {
+                            val nextLocked = !currentSeat.locked
+                            roomSocketRef.value?.takeIf { it.connected() }?.emit(
+                                "room_seat_action",
+                                JSONObject().put("roomId", roomId).put("userId", accountId)
+                                    .put("action", "lock").put("seatNumber", currentSeat.number)
+                                    .put("isLocked", nextLocked)
+                            )
+                            showSeatSheet = false
+                            selectedSeat = 0
+                        }
+                    }
+                },
+                onInvite={
+                    showSeatSheet=false
+                    showSeatInviteUsers=true
+                }
+            )
+        }
+        if(selectedSeat>0 && seats.firstOrNull{it.number==selectedSeat}?.occupied==true && !showSeatSheet) {
+            val profileSeat = seats.first { it.number == selectedSeat }
+            RoomProfile(
+                user = RoomUser(
+                    id = profileSeat.accountId,
+                    uid = profileSeat.accountId,
+                    accountId = profileSeat.accountId,
+                    name = profileSeat.userName.ifBlank { "User" },
+                    image = profileSeat.userImage,
+                    isInSeat = true,
+                    isMuted = profileSeat.muted,
+                    isLocked = profileSeat.locked
+                ),
+                isCurrentUser = profileSeat.accountId == accountId,
+                isRoomOwner = profileSeat.accountId == roomOwner.accountId.ifBlank { roomOwner.id },
+                canModerate = currentUserSeatIds.any { it == roomId || it == roomOwnerAccountId || it in roomAdminIds },
+                onClose = { selectedSeat = 0 },
+                onOpenPublicProfile = { profile -> selectedSeat = 0; showSeatSheet = false; keepingRoomForMini = true; onOpenPublicProfile(profile) },
+                onMention = { name, targetId ->
+                    val cleanName = name.trim().ifBlank { "User" }
+                    run {
+                        val cursor = inputSelection.coerceIn(0, input.length)
+                        val insertion = (if (cursor > 0 && !input[cursor - 1].isWhitespace()) " " else "") + "@$cleanName "
+                        input = input.substring(0, cursor) + insertion + input.substring(cursor)
+                        inputSelection = cursor + insertion.length
+                    }
+                    if (targetId.isNotBlank()) pendingMentions = (pendingMentions.filterNot { it.accountId == targetId } + NativeMention(targetId, cleanName))
+                    showChat = true
+                    selectedSeat = 0
+                },
+                onCopyId = {
+                    clipboard.setText(AnnotatedString(profileSeat.accountId))
+                    copiedId = profileSeat.accountId
+                },
+                onLeaveSeat = {
+                    seats[seats.indexOfFirst { it.number == selectedSeat }.takeIf { it >= 0 } ?: 0] =
+                        NativeRoomSeat(number = selectedSeat)
+                    roomSocketRef.value?.emit(
+                        "room_seat_action",
+                        JSONObject().put("roomId", roomId).put("userId", accountId)
+                            .put("targetUserId", profileSeat.accountId).put("action", "leave").put("seatNumber", selectedSeat)
+                    )
+                    selectedSeat = 0
+                },
+                onFollow = { onFollowToggle(profileSeat.accountId, true) },
+                onMessage = {
+                    val receiverId = profileSeat.accountId.trim()
+                    if (receiverId.isNotBlank() && receiverId != accountId) {
+                        showSeatSheet = false
+                        selectedSeat = 0
+                        selectedOfficialChat = Triple(
+                            receiverId,
+                            profileSeat.userName.ifBlank { "User" },
+                            profileSeat.userImage
+                        )
+                    }
+                },
+                onMute = {
+                    val idx = seats.indexOfFirst { it.number == selectedSeat }
+                    if (idx >= 0) {
+                        val nextMuted = !seats[idx].muted
+                        seats[idx] = seats[idx].copy(muted = nextMuted)
+                        roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId)
+                            .put("userId", accountId).put("action", "owner_mute").put("seatNumber", selectedSeat).put("isMuted", nextMuted))
+                    }
+                },
+                onLock = {
+                    val idx = seats.indexOfFirst { it.number == selectedSeat }
+                    if (idx >= 0 && (accountId == roomOwner.accountId || accountId == roomOwner.id || accountId == roomOwner.uid || accountId == roomId || roomAdminIds.any { it.trim() in currentUserSeatIds })) {
+                        val nextLocked = !seats[idx].locked
+                        val lockedSeat = seats[idx]
+                        seats[idx] = if (nextLocked) NativeRoomSeat(number = selectedSeat, locked = true)
+                            else lockedSeat.copy(locked = false)
+                        roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId)
+                            .put("userId", accountId).put("action", "lock").put("seatNumber", selectedSeat).put("isLocked", nextLocked))
+                        if (nextLocked) selectedSeat = 0
+                    }
+                },
+                onKickOut = { selectedTime ->
+                    val durationMs = when (selectedTime) {
+                        "15 minutes" -> 15L * 60_000L
+                        "30 minutes" -> 30L * 60_000L
+                        "2 hours" -> 2L * 60L * 60_000L
+                        "24 hours" -> 24L * 60L * 60_000L
+                        else -> 30L * 60_000L
+                    }
+                    roomSocketRef.value?.emit("room_seat_action", JSONObject().put("roomId", roomId)
+                        .put("userId", accountId).put("action", "kick").put("targetUserId", profileSeat.accountId)
+                        .put("seatNumber", selectedSeat).put("durationMs", durationMs)
+                        .put("targetName", profileSeat.userName).put("targetImage", profileSeat.userImage)
+                        .put("actorName", roomDisplayName).put("actorImage", roomDisplayImage)
+                        .put("actorRole", if (currentUserSeatIds.any { it in roomAdminIds }) "admin" else "owner")
+                        .put("ownerName", roomDisplayName).put("ownerImage", roomDisplayImage))
+                    val idx = seats.indexOfFirst { it.number == selectedSeat }
+                    if (idx >= 0) seats[idx] = NativeRoomSeat(number = selectedSeat)
+                    selectedSeat = 0
+                }
+            )
+        }
+        if(showMessageSheet) {
+            val screenHeight = LocalConfiguration.current.screenHeightDp
+            val sheetShape = RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp)
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.30f)).clickable{showMessageSheet=false},contentAlignment=Alignment.BottomCenter) {
+                Surface(modifier=Modifier.fillMaxWidth().height((screenHeight * .60f).dp).clip(sheetShape).clickable(enabled=false) {},color=Color.White,contentColor=Color.Black,shape=sheetShape,shadowElevation=16.dp) {
+                    Column(Modifier.fillMaxSize().clip(sheetShape).background(Color.White)) {
+                        MessageScreen(
+                            onChat={ uid, name, image ->
+                                selectedOfficialChat = Triple(uid, name, image)
+                                showMessageSheet = false
+                            },
+                            embeddedSheet=true,
+                            onBack={ showMessageSheet=false },
+                            onJoinRoom=onJoinRoom
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showLuckyBagCenterReveal) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .clickable { showLuckyBagCenterReveal = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.9f),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                        AsyncImage(
+                            model = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261021_170648.png",
+                            contentDescription = "Lucky Bag Claim Reveal",
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).clickable(enabled = false) {},
+                            contentScale = ContentScale.Fit
+                        )
+                        Column(
+                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 34.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            AsyncImage(
+                                model = luckyBagSenderImage.ifBlank { "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/default-avatar.png" },
+                                contentDescription = "Lucky Bag sender avatar",
+                                modifier = Modifier.size(58.dp).clip(CircleShape).border(2.dp, Color(0xFFFFE4A0), CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                            Text(
+                                text = "Lucky Bag from ${luckyBagSenderName.ifBlank { "User" }}",
+                                color = Color(0xFF8B3B26), fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 5.dp)
+                            )
+                            luckyBagClaimError?.let {
+                                Text(it, color = Color(0xFFB91C1C), fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp).padding(horizontal = 12.dp))
+                            }
+                        }
+                    }
+                    
+                    Box(
+                        modifier = Modifier
+                             .offset(y = 4.dp)
+                            .width(190.dp)
+                            .height(72.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Brush.verticalGradient(listOf(Color(0xFFFFF2A2), Color(0xFFFFE28A), Color(0xFFF4C46B), Color(0xFFFFF0A0))))
+                            .border(3.dp, Color(0xFFFFEDB0), RoundedCornerShape(50))
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Brush.verticalGradient(listOf(Color(0xFFFFE7A0), Color(0xFFF5C66E), Color(0xFFFFEDB0))))
+                            .border(3.dp, Color(0xFFF5D27D), RoundedCornerShape(50))
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Brush.verticalGradient(listOf(Color(0xFFFFF0C9), Color(0xFFFFDDA0), Color(0xFFFFCC85))))
+                            .border(3.dp, Color(0xFFFFF0C4), RoundedCornerShape(50))
+                            .clickable(enabled = !luckyBagClaiming) {
+                                if (luckyBagId.isBlank()) {
+                                    luckyBagClaimError = "Lucky Bag is unavailable"
+                                } else {
+                                    luckyBagClaiming = true
+                                    luckyBagClaimError = null
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        val result = runCatching {
+                                            val payload = JSONObject().put("bagId", luckyBagId).put("userId", canonicalWalletUserId)
+                                            val connection = (java.net.URL("https://zyora-server.onrender.com/api/lucky-bag/claim").openConnection() as java.net.HttpURLConnection).apply {
+                                                requestMethod = "POST"
+                                                connectTimeout = 12000
+                                                readTimeout = 15000
+                                                doOutput = true
+                                                setRequestProperty("Content-Type", "application/json")
+                                            }
+                                            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                                            val status = connection.responseCode
+                                            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                                            val body = stream.bufferedReader().use { it.readText() }
+                                            connection.disconnect()
+                                            val json = JSONObject(body)
+                                            if (status !in 200..299 || !json.optBoolean("success")) throw IllegalStateException(json.optString("error", "Claim failed"))
+                                            json
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            luckyBagClaiming = false
+                                            result.onSuccess { json ->
+                                                luckyBagClaimAmount = json.optLong("amount")
+                                                showLuckyBagCenterReveal = false
+                                                showLuckyBagClaimedCard = true
+                                                showFloatingLuckyBag = false
+                                            }.onFailure { err -> luckyBagClaimError = err.message ?: "Claim failed" }
+                                        }
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (luckyBagClaiming) "Open" else "Open",
+                            color = Color(0xFFDF182B),
+                            fontSize = 23.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
+        
+        if (showLuckyBagClaimedCard) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.6f)).clickable { showLuckyBagClaimedCard=false }, contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth(0.85f).aspectRatio(0.59f).clickable(enabled=false){}) {
+                    Box(Modifier.fillMaxSize().padding(top = 40.dp).clip(RoundedCornerShape(topStart=32.dp, topEnd=32.dp, bottomStart=18.dp, bottomEnd=18.dp)).background(Brush.linearGradient(listOf(Color(0xFFFF6449), Color(0xFFFF263F), Color(0xFFE90037)))))
+                    
+                    Column(
+                        modifier = Modifier.align(Alignment.TopCenter).zIndex(2f).offset(y = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        AsyncImage(
+                            model = luckyBagSenderImage.ifBlank { "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/default-avatar.png" },
+                            contentDescription = "Lucky Bag sender avatar",
+                            modifier = Modifier.size(62.dp).clip(CircleShape).border(3.dp, Color(0xFFFFD875), CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        Text(
+                            text = "Lucky Bag from ${luckyBagSenderName.ifBlank { "User" }}",
+                            color = Color(0xFF8B3B26), fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 5.dp)
+                        )
+                    }
+
+                    Box(Modifier.align(Alignment.TopCenter).fillMaxWidth(0.9f).fillMaxHeight(0.72f).clip(RoundedCornerShape(24.dp)).background(Brush.verticalGradient(listOf(Color(0xFFFFF7E5), Color(0xFFFFF0D4))))) {
+                        Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 66.dp).fillMaxWidth()) {
+                            Box(Modifier.fillMaxWidth().height(2.dp).padding(horizontal = 24.dp).background(Color(0xFFF5EBD8)))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Received ${luckyBagClaimAmount} Coins", color = Color(0xFFD29A72), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Details", color = Color(0xFFD29A72), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    Icon(Icons.Default.ChevronRight, null, tint = Color(0xFFD29A72), modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Canvas(Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(0.35f)) {
+                        val w = size.width
+                        val h = size.height
+                        
+                        val goldBrush = Brush.verticalGradient(listOf(Color(0xFFFFF8C9), Color(0xFFFFD76D), Color(0xFFFFAD36), Color(0xFFFFF0A9)))
+                        val goldPath = Path().apply {
+                            moveTo(0f, h * 0.15f)
+                            quadraticBezierTo(w / 2f, -h * 0.05f, w, h * 0.15f)
+                            lineTo(w, h * 0.28f)
+                            quadraticBezierTo(w / 2f, h * 0.08f, 0f, h * 0.28f)
+                            close()
+                        }
+                        drawPath(goldPath, goldBrush)
+                        
+                        val redBrush = Brush.verticalGradient(listOf(Color(0xFFFF6449), Color(0xFFE90037)))
+                        val redPath = Path().apply {
+                            moveTo(0f, h * 0.26f)
+                            quadraticBezierTo(w / 2f, h * 0.06f, w, h * 0.26f)
+                            lineTo(w, h)
+                            lineTo(0f, h)
+                            close()
+                        }
+                        drawPath(redPath, redBrush)
+                    }
+
+                    Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp).fillMaxWidth(0.85f).height(62.dp).clip(RoundedCornerShape(50)).background(Color(0xFFFF304D)).border(3.dp, Color(0xFFFFDC73), RoundedCornerShape(50)).padding(5.dp).clip(RoundedCornerShape(50)).background(Brush.verticalGradient(listOf(Color(0xFFFFF2B9), Color(0xFFFFD28A), Color(0xFFFFAC45), Color(0xFFFFE8A0)))).border(3.dp, Color(0xFFFFF0AD), RoundedCornerShape(50)).clickable {                        showLuckyBagClaimedCard = false
+                    }, contentAlignment = Alignment.Center) {
+                        Text("Confirm", color = Color(0xFF9A4F1C), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                }
+            }
+        }
+        if (showInviteSheet) RoomInviteSheet(
+            roomUsers = activeRoomUsers,
+            currentUserId = accountId,
+            roomOwnerId = roomOwner.accountId.ifBlank { roomOwner.id },
+            onClose = { showInviteSheet = false },
+            onInvite = { target ->
+                val socket = roomSocketRef.value
+                if (socket?.connected() == true && selectedSeat > 0) {
+                    socket.emit(
+                        "room_seat_invite_send",
+                        JSONObject()
+                            .put("roomId", roomId)
+                            .put("inviterId", accountId)
+                            .put("inviterName", roomDisplayName.ifBlank { "User" })
+                            .put("inviterImage", roomDisplayImage)
+                            .put("targetId", target.accountId)
+                            .put("seatNumber", selectedSeat)
+                    )
+                    showInviteSheet = false
+                    selectedSeat = 0
+                }
+            }
+        )
+        incomingSeatInvite?.let { invite ->
+            RoomSeatInviteDialog(
+                inviterName = invite.optString("inviterName", "User"),
+                inviterImage = invite.optString("inviterImage", ""),
+                onRefuse = {
+                    val socket = roomSocketRef.value
+                    if (socket?.connected() == true) {
+                        socket.emit(
+                            "room_seat_invite_response",
+                            JSONObject().put("roomId", roomId).put("targetId", accountId)
+                                .put("inviterId", invite.optString("inviterId"))
+                                .put("inviteId", invite.optString("inviteId"))
+                                .put("seatNumber", invite.optInt("seatNumber")).put("accepted", false)
+                        )
+                        incomingSeatInvite = null
+                    }
+                },
+                onAccept = {
+                    val socket = roomSocketRef.value
+                    if (socket?.connected() == true) {
+                        socket.emit(
+                            "room_seat_invite_response",
+                            JSONObject().put("roomId", roomId).put("targetId", accountId)
+                                .put("inviterId", invite.optString("inviterId"))
+                                .put("inviteId", invite.optString("inviteId"))
+                                .put("seatNumber", invite.optInt("seatNumber")).put("accepted", true)
+                                .put("userName", roomDisplayName.ifBlank { "User" })
+                                .put("userImage", roomDisplayImage)
+                        )
+                        incomingSeatInvite = null
+                    }
+                }
+            )
+        }
+        // Keep direct chats above every room overlay so the owner chat is visible immediately.
+        selectedOfficialChat?.let { chat ->
+            key(chat.first) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .background(Color.White)
+                        .zIndex(500f)
+                ) {
+                    NativeChatScreen(
+                        name = chat.second,
+                        image = chat.third,
+                        receiverId = chat.first,
+                        currentUserId = currentUser.uid.ifBlank { currentUser.id },
+                        currentAccountIdOverride = currentUser.accountId.ifBlank { currentUser.id },
+                        onBack = { selectedOfficialChat = null; pendingRoomInvitationJson = null },
+                        onJoinRoom = onJoinRoom,
+                        initialRoomInvitation = pendingRoomInvitationJson
+                    )
+                }
+            }
+        }
+        
+
+    }
+}
+
+
+@Composable
+private fun RoomPageBlock(content: @Composable () -> Unit) {
+    content()
+}
+
+
+@Composable
+private fun RoomChatMessages(
+    state: androidx.compose.foundation.lazy.LazyListState,
+    messages: List<NativeRoomMessage>,
+    kickNotices: List<NativeRoomKickNotice>,
+    showOfficialAnnouncement: Boolean,
+    clearedBy: String,
+    announcement: String,
+    showRoomSettingsAnnouncementInChat: Boolean,
+    roomOwnerId: String,
+    roomAdminIds: List<String> = emptyList(),
+    onSelectMessage: (NativeRoomMessage) -> Unit,
+    onSelectMention: (NativeMention) -> Unit = {},
+    onCopyMessage: (String) -> Unit = {}
+) {
+    LazyColumn(
+        state = state,
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (showOfficialAnnouncement) {
+                                item {
+                                    Column(Modifier.fillMaxWidth().padding(start=4.dp, top=8.dp, end=82.dp, bottom=2.dp)) {
+                                        Column(Modifier.fillMaxWidth(.92f).clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha=.30f)).padding(horizontal=14.dp,vertical=12.dp)) {
+                                            Text("Announcement: Welcome to Zyora. Any content related to porn, fraud, or fake official accounts will result in a ban!",color=Color(0xFFE2C67D),fontSize=13.sp,lineHeight=16.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.Medium)
+                                        }
+                                    }
+                                }
+                            } else if (clearedBy.isNotBlank()) {
+                                // CLEARED CHAT MESSAGE UI WITH SMALLER FONT
+                                item {
+                                    Column(Modifier.fillMaxWidth().padding(start=4.dp, top=8.dp, end=82.dp, bottom=2.dp)) {
+                                        Column(Modifier.wrapContentWidth().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha=.30f)).padding(horizontal=12.dp, vertical=8.dp), verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                            Row(verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                                                Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFF00C853)), contentAlignment=Alignment.Center) {
+                                                    Icon(Icons.Default.Notifications, contentDescription="System", tint=Color.White, modifier=Modifier.size(16.dp))
+                                                }
+                                                Text("System", color=Color(0xFFD1D1D1), fontSize=15.sp, fontWeight=FontWeight.Medium)
+                                            }
+                                            Row(verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                                Text(clearedBy, color=Color(0xFFE2C67D), fontSize=13.sp, fontWeight=FontWeight.Bold, maxLines=1, softWrap=false, overflow=TextOverflow.Ellipsis)
+                                                Text("cleared the chat message", color=Color.White, fontSize=13.sp, fontWeight=FontWeight.Normal, maxLines=1, softWrap=false)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if(showRoomSettingsAnnouncementInChat && announcement.isNotBlank()) {
+                                item {
+                                    Column(Modifier.fillMaxWidth().padding(start=4.dp, end=82.dp, bottom=2.dp)) {
+                                        Column(Modifier.fillMaxWidth(.92f).clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha=.30f)).padding(horizontal=14.dp,vertical=12.dp)) {
+                                            Text("ANNOUNCEMENT: $announcement",color=Color(0xFFE2C67D),fontSize=13.sp,lineHeight=16.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.Medium)
+                                        }
+                                    }
+                                }
+                            }
+                            items(kickNotices, key = { it.id }) { notice ->
+                                Column(Modifier.fillMaxWidth().padding(start=4.dp, top=0.dp, end=82.dp, bottom=2.dp)) {
+                                    Column(Modifier.wrapContentWidth().clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha=.30f)).padding(horizontal=12.dp, vertical=8.dp), verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                        Row(verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                                            Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFF00C853)), contentAlignment=Alignment.Center) {
+                                                Icon(Icons.Default.Notifications, contentDescription="System", tint=Color.White, modifier=Modifier.size(16.dp))
+                                            }
+                                            Text("System", color=Color(0xFFD1D1D1), fontSize=15.sp, fontWeight=FontWeight.Medium)
+                                        }
+                                        Row(verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                            FallbackAsyncImage(model=notice.targetImage, contentDescription=notice.targetName, modifier=Modifier.size(22.dp).clip(CircleShape), contentScale=ContentScale.Crop)
+                                            Text(notice.targetName, color=Color(0xFFE2C67D), fontSize=13.sp, fontWeight=FontWeight.Bold, maxLines=1, softWrap=false, overflow=TextOverflow.Ellipsis)
+                                            Text("are kicked out of Room by", color=Color.White, fontSize=13.sp, maxLines=1, softWrap=false)
+                                        }
+                                        Row(verticalAlignment=Alignment.CenterVertically, horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                            FallbackAsyncImage(model=notice.actorImage, contentDescription=notice.actorName, modifier=Modifier.size(22.dp).clip(CircleShape), contentScale=ContentScale.Crop)
+                                            Text(notice.actorName, color=Color(0xFFE2C67D), fontSize=13.sp, fontWeight=FontWeight.Bold, maxLines=1, softWrap=false, overflow=TextOverflow.Ellipsis)
+                                            Text("(${notice.actorRole})", color=Color.White, fontSize=13.sp, fontWeight=FontWeight.Normal)
+                                        }
+                                    }
+                                }
+                            }
+                            items(messages,key={it.id}){message ->
+                                if(message.type=="join") {
+                                    Column(Modifier.padding(vertical=2.dp).wrapContentWidth().clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha=.30f)).padding(horizontal=12.dp,vertical=4.dp),horizontalAlignment=Alignment.Start,verticalArrangement=Arrangement.spacedBy(2.dp)){
+                                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp), modifier=Modifier.clickable { onSelectMessage(message) }){
+                                            FallbackAsyncImage(model=message.senderImage,contentDescription=message.sender,modifier=Modifier.size(24.dp).clip(CircleShape),contentScale=ContentScale.Crop)
+                                            Text(message.sender,color=Color.White.copy(alpha=.95f),fontSize=12.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                            if (message.senderAccountId == roomOwnerId) {
+                                                AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261027_235537.png", contentDescription="Owner", contentScale=ContentScale.Fit, modifier=Modifier.height(16.dp))
+                                            } else if (message.senderAccountId in roomAdminIds) {
+                                                AsyncImage(model=ROOM_ADMIN_TAG, contentDescription="Room Admin", contentScale=ContentScale.Fit, modifier=Modifier.height(16.dp))
+                                            }
+                                            
+
+                                            val hasPublicProfileIdImage = message.senderAccountId in setOf("100002", "100003", "500001", "500002", "500003", "500004")
+                                            if (hasPublicProfileIdImage) {
+                                                AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261101_125212.png", contentDescription = "Purple ID", contentScale = ContentScale.Fit, modifier = Modifier.height(16.dp).widthIn(min = 14.dp, max = 22.dp))
+                                            }
+                                            
+                                            Box(modifier = Modifier.height(16.dp).width(36.dp), contentAlignment = Alignment.CenterEnd) {
+                                                AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261028_004355.png", contentDescription = "Level", contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+                                                Text("Lv.1", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterEnd).offset(x = 2.dp, y = (-3).dp).padding(end = 5.dp))
+                                            }
+                                        }
+                                        Text("Enter the room",color=Color.White,fontSize=12.sp,fontWeight=FontWeight.Bold, modifier=Modifier.padding(start=2.dp).clickable { onSelectMessage(message) })
+                                    }
+                                } else NativeMessage(message, roomOwnerId = roomOwnerId, roomAdminIds = roomAdminIds, onAvatarClick = { onSelectMessage(message) }, onMentionClick = onSelectMention, onCopyMessage = onCopyMessage)
+                            }
+                        }
+}
+
+private fun formatMusicTime(seconds: Float): String {
+    if (seconds.isNaN() || seconds < 0f) return "0:00"
+    val t = seconds.toInt()
+    return "${t / 60}:${(t % 60).toString().padStart(2, '0')}"
+}
+
+
+@Composable
+private fun RoomInviteSheet(
+    roomUsers: List<ActiveUserNative>,
+    currentUserId: String,
+    roomOwnerId: String,
+    onClose: () -> Unit,
+    onInvite: (ActiveUserNative) -> Unit
+) {
+    val context = LocalContext.current
+    var countryByUser by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(roomUsers) {
+        countryByUser = withContext(Dispatchers.IO) {
+            roomUsers.mapNotNull { user ->
+                if (user.accountId.isBlank()) return@mapNotNull null
+                val country = runCatching {
+                    loadRoomProfileCountry(context, user.accountId, user.name, user.image, user.country)
+                }.getOrDefault("")
+                user.accountId to country
+            }.toMap()
+        }
+    }
+    val visibleUsers = roomUsers.filter { it.accountId.isNotBlank() && it.accountId != currentUserId }
+        .distinctBy { it.accountId }
+        .sortedWith(compareBy<ActiveUserNative> { if (it.accountId == roomOwnerId) 0 else 1 }.thenBy { it.name.lowercase() })
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .30f)).clickable { onClose() }, contentAlignment = Alignment.BottomCenter) {
+        Column(
+            Modifier.fillMaxWidth().fillMaxHeight(.5f)
+                .clip(RoundedCornerShape(topStart = 11.dp, topEnd = 11.dp))
+                .background(Color(0xF5000000))
+                .clickable(enabled = false) {},
+        ) {
+            Text("Invite", modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 10.dp),
+                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            LazyColumn(
+                Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(start = 13.dp, end = 12.dp, top = 3.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(visibleUsers, key = { it.accountId }) { user ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = user.image.ifBlank { "https://zyora-voice-chat.vercel.app/default-avatar.png" },
+                            contentDescription = user.name,
+                            modifier = Modifier.size(38.dp).clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        Column(Modifier.weight(1f).padding(start = 9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(user.name.ifBlank { "User" }, color = Color.White, fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                                if (user.accountId == roomOwnerId) {
+                                    AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261027_235537.png",
+                                        contentDescription = "Owner", contentScale = ContentScale.Fit, modifier = Modifier.height(18.dp).width(40.dp))
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(Modifier.width(18.dp).height(18.dp), contentAlignment = Alignment.Center) {
+                                    val flagCountry = countryByUser[user.accountId].orEmpty()
+                                    if (flagCountry.isNotBlank()) CountryFlagImage(flagCountry, Modifier.size(18.dp, 12.dp))
+                                }
+                                Box(Modifier.height(16.dp).width(36.dp), contentAlignment = Alignment.CenterEnd) {
+                                    AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261028_004355.png",
+                                        contentDescription = "Level", contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+                                    Text("Lv.1", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.offset(x = 2.dp, y = (-3).dp).padding(end = 5.dp))
+                                }
+                            }
+                        }
+                        AsyncImage(
+                            model = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/IMG_20261107_153857.png",
+                            contentDescription = "Invite",
+                            modifier = Modifier.padding(start = 8.dp).width(66.dp).height(30.dp).clickable { onInvite(user) },
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+                if (visibleUsers.isEmpty()) {
+                    item { Text("No active users", modifier = Modifier.fillMaxWidth().padding(18.dp),
+                        color = Color.White.copy(alpha = .65f), fontSize = 12.sp, textAlign = TextAlign.Center) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomSeatInviteDialog(
+    inviterName: String,
+    inviterImage: String,
+    onRefuse: () -> Unit,
+    onAccept: () -> Unit
+) {
+    val raw = "https://raw.githubusercontent.com/khaiwilsan676-alt/Zyora-Voice-Chat/main/public/"
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .68f)), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth(.84f).aspectRatio(1475f / 792f), contentAlignment = Alignment.Center) {
+            AsyncImage(
+                model = raw + "IMG_20261106_001208.png",
+                contentDescription = "Mic invitation",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).align(Alignment.TopCenter).padding(top = 34.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(13.dp))
+                Text(inviterName.ifBlank { "User" }, color = Color.White, fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.offset(y = (-11).dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("Invite you to join mic", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.width(5.dp))
+                    AsyncImage(model = raw + "IMG_20261106_001226.png", contentDescription = "Mic",
+                        modifier = Modifier.size(23.dp), contentScale = ContentScale.Fit)
+                }
+            }
+            AsyncImage(
+                model = inviterImage.ifBlank { "https://zyora-voice-chat.vercel.app/default-avatar.png" },
+                contentDescription = "Inviter avatar",
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = (-27).dp).size(68.dp).clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+            Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 22.dp, bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(Modifier.weight(1f).height(43.dp).clip(RoundedCornerShape(9.dp))
+                    .background(Color.White.copy(alpha = .10f)).clickable { onRefuse() }, contentAlignment = Alignment.Center) {
+                    Text("Refuse", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                Box(Modifier.weight(1f).height(43.dp).clip(RoundedCornerShape(9.dp))
+                    .background(Brush.verticalGradient(listOf(Color(0xFFFFE49A), Color(0xFFD69A36))))
+                    .clickable { onAccept() }, contentAlignment = Alignment.Center) {
+                    Text("Accept", color = Color(0xFF4B2D08), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun SeatActionSheet(seat:NativeRoomSeat,isOwner:Boolean,isMySeat:Boolean,onDismiss:()->Unit,onTake:()->Unit,onLeave:()->Unit,onMute:()->Unit,onLock:()->Unit,onInvite:()->Unit){
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.30f)).clickable{onDismiss()},contentAlignment=Alignment.BottomCenter){
+        Surface(Modifier.fillMaxWidth(),color=Color.White.copy(alpha=.96f),shape=RoundedCornerShape(topStart=12.dp,topEnd=12.dp)){
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
+                if(!seat.occupied && !isMySeat) SeatSheetAction("Take Mic",enabled=!seat.locked,onClick=onTake)
+                if(isMySeat) SeatSheetAction("Leave Seat",onClick=onLeave)
+                if(isOwner || isMySeat || seat.occupied) SeatSheetAction(if(seat.muted)"Unmute Seat" else "Mute Seat",onClick=onMute)
+                if(isOwner) SeatSheetAction(if(seat.locked)"Unlock Mic" else "Lock Mic",onClick=onLock)
+                SeatSheetAction("Invite",onClick=onInvite)
+            }
+        }
+    }
+}
+
+@Composable private fun SeatSheetAction(label:String,enabled:Boolean=true,onClick:()->Unit){
+    TextButton(onClick=onClick,enabled=enabled,modifier=Modifier.fillMaxWidth().height(44.dp),shape=RoundedCornerShape(10.dp)){ Text(label,color=if(enabled)Color(0xFF171717) else Color.Gray,fontSize=14.sp) }
+}
+
+@Composable private fun RoomFooterButton(onClick:()->Unit,description:String,icon:Int,hasUnread:Boolean=false){
+    Box(Modifier.size(42.dp).clip(CircleShape).background(Color.Black.copy(alpha=.30f)).clickable(onClick=onClick),contentAlignment=Alignment.Center){
+        Image(painterResource(icon),contentDescription=description,modifier=Modifier.size(when(description){"Say Hi Chat"->30.dp;"Emoji"->26.dp;"Message Box Menu"->28.dp;"Apps Menu"->26.dp;else->26.dp}))
+        if (hasUnread && description == "Message Box Menu") {
+            // Anchor the unread indicator to the mail glyph, not its touch target.
+            Box(
+                Modifier.align(Alignment.TopEnd)
+                    .padding(top = 7.dp, end = 7.dp)
+                    .size(8.dp).background(Color(0xFFFF3030), CircleShape)
+            )
+        }
+    }
+}
+
+@Composable private fun NativeSeat(seat:NativeRoomSeat,ownerId:String,roomAdminIds:List<String> = emptyList(),isSpeaking:Boolean=seat.speaking,seatSize:Dp=62.dp,onClick:()->Unit){
+    val waveProgress = if (isSpeaking) {
+        val voicePulse = rememberInfiniteTransition(label = "voice-wave")
+        voicePulse.animateFloat(
+            initialValue = 0.15f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(850, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "voice-wave-progress"
+        ).value
+    } else 0.15f
+    val raw="https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/"
+    
+    var showGif by remember(seat.gifTimestamp) { mutableStateOf(seat.gifSrc.isNotBlank()) }
+    LaunchedEffect(seat.gifTimestamp) {
+        if (seat.gifTimestamp != 0L && seat.gifSrc.isNotBlank()) {
+            showGif = true
+            kotlinx.coroutines.delay(5000)
+            showGif = false
+        } else {
+            showGif = false
+        }
+    }
+
+    Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.width(seatSize).clickable(onClick=onClick)){
+        Box(Modifier.size(seatSize),contentAlignment=Alignment.Center){ 
+            Canvas(Modifier.fillMaxSize()) {
+                val blue = !seat.locked
+                val ringBrush = Brush.linearGradient(colors = if(blue) listOf(Color(0xFFD9F7FF),Color(0xFF91E1FF),Color(0xFF4DBFEF),Color(0xFF299DD6),Color(0xFF167DB9)) else listOf(Color(0xFFF3F4F6),Color(0xFFD1D5DB),Color(0xFF9CA3AF),Color(0xFF6B7280),Color(0xFF4B5563)),start=Offset(size.width*100f/512f,size.height*55f/512f),end=Offset(size.width*420f/512f,size.height*460f/512f))
+                val radius=size.minDimension*225f/512f
+                val center=Offset(size.width/2f,size.height/2f)
+                drawCircle(color=if(blue) Color(0xFF55C6F3).copy(alpha=.25f) else Color(0xFF9CA3AF).copy(alpha=.25f),radius=radius+size.minDimension*7.5f/512f,center=center,style=Stroke(width=size.minDimension*15f/512f))
+                if (isSpeaking) {
+                    // Soft white/10 voice ripples; keep the avatar and seat layout unchanged.
+                    val firstRadius = size.minDimension * (0.52f + waveProgress * 0.16f)
+                    val secondProgress = (waveProgress + 0.5f) % 1f
+                    val secondRadius = size.minDimension * (0.52f + secondProgress * 0.16f)
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.10f * (1f - waveProgress)),
+                        radius = firstRadius,
+                        center = center,
+                        style = Stroke(width = size.minDimension * 0.060f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.10f * (1f - secondProgress)),
+                        radius = secondRadius,
+                        center = center,
+                        style = Stroke(width = size.minDimension * 0.048f)
+                    )
+                }
+                drawCircle(brush=ringBrush,radius=radius,center=center,style=Stroke(width=size.minDimension*10f/512f))
+                val shine = Brush.horizontalGradient(colors=listOf(Color.White.copy(alpha=0f),Color.White.copy(alpha=.75f),Color.White.copy(alpha=.95f),Color.White.copy(alpha=0f)),startX=0f,endX=size.width)
+                val topHighlight=Path().apply { moveTo(size.width*98f/512f,size.height*134f/512f); cubicTo(size.width*113f/512f,size.height*108f/512f,size.width*132f/512f,size.height*92f/512f,size.width*153f/512f,size.height*79f/512f); cubicTo(size.width*174f/512f,size.height*67f/512f,size.width*196f/512f,size.height*59f/512f,size.width*218f/512f,size.height*56f/512f) }
+                drawPath(topHighlight,shine,style=Stroke(width=size.minDimension*7.5f/512f,cap=StrokeCap.Round))
+                val bottomHighlight=Path().apply { moveTo(size.width*207f/512f,size.height*452f/512f); cubicTo(size.width*258f/512f,size.height*466f/512f,size.width*316f/512f,size.height*456f/512f,size.width*361f/512f,size.height*428f/512f); cubicTo(size.width*378f/512f,size.height*417f/512f,size.width*392f/512f,size.height*404f/512f,size.width*404f/512f,size.height*388f/512f) }
+                drawPath(bottomHighlight,shine,style=Stroke(width=size.minDimension*7f/512f,cap=StrokeCap.Round))
+            }
+            Box(Modifier.fillMaxSize(.91f),contentAlignment=Alignment.Center){
+                if(seat.locked) AsyncImage(model=raw+"file_0000000015a48211b000ee447a786f7c.png",contentDescription="Locked seat",modifier=Modifier.fillMaxSize(.62f),contentScale=ContentScale.Fit)
+                else if(seat.occupied) {
+                    FallbackAsyncImage(model=seat.userImage,contentDescription=seat.userName,modifier=Modifier.fillMaxSize().clip(CircleShape),contentScale=ContentScale.Crop)
+                    NativeAvatarFrameOverlay(userId=seat.accountId,modifier=Modifier.fillMaxSize())
+                } else AsyncImage(model=raw+"file_000000003e7482309b7f6e7f2a922160.png",contentDescription="Empty seat",modifier=Modifier.fillMaxSize(.65f),contentScale=ContentScale.Fit)
+            }
+            
+            if(showGif && seat.gifSrc.isNotBlank()) {
+                if (seat.gifSrc.substringBefore("?").lowercase().endsWith(".mp4")) {
+                    TransparentSeatVideoPlayer(
+                        videoUrl = seat.gifSrc,
+                        modifier = Modifier.fillMaxSize(),
+                        onVideoFinished = { showGif = false }
+                    )
+                } else {
+                    AsyncImage(model=seat.gifSrc,contentDescription="Emoji reaction",modifier=Modifier.fillMaxSize(),contentScale=ContentScale.Fit)
+                }
+            }
+            
+            if(seat.muted) Box(Modifier.align(Alignment.BottomEnd).clip(CircleShape).background(Color.White).padding(2.dp)) { Icon(Icons.Default.MicOff,null,tint=Color.Black,modifier=Modifier.size(12.dp)) }
+        }
+        
+        if (seat.occupied && (seat.accountId == ownerId || seat.accountId in roomAdminIds)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                AsyncImage(
+                    model = if (seat.accountId == ownerId) "https://zyora-voice-chat.vercel.app/IMG_20261027_235537.png" else ROOM_ADMIN_TAG,
+                    contentDescription = if (seat.accountId == ownerId) "Owner" else "Room Admin",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.height(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(seat.userName, color = Color.White.copy(.9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+        } else {
+            Text(if (seat.occupied) seat.userName else seat.number.toString(), color = Color.White.copy(.9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable private fun NativeMessage(m:NativeRoomMessage, roomOwnerId: String, roomAdminIds: List<String> = emptyList(), onAvatarClick: () -> Unit = {}, onMentionClick: (NativeMention) -> Unit = {}, onCopyMessage: (String) -> Unit = {}){
+    val context = LocalContext.current
+    var showRoomImagePreview by remember(m.id) { mutableStateOf(false) }
+    val profileDb = remember(context) { NativeIndexDatabase(context) }
+    var profileTags by remember(m.senderAccountId) { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(m.senderAccountId) {
+        if (m.senderAccountId.isNotBlank()) {
+            // SQLite reads/writes and remote profile refreshes must never run on the
+            // Compose main thread while the room chat is being laid out.
+            val cached = withContext(Dispatchers.IO) {
+                runCatching { profileDb.loadProfile(m.senderAccountId) }.getOrNull()
+            }
+            profileTags = cached
+            val remote = ProfilePersistence.load(
+                TargetUser(uid = m.senderAccountId, id = m.senderAccountId, accountId = m.senderAccountId, name = m.sender, image = m.senderImage)
+            )
+            if (remote != null) {
+                val merged = JSONObject(cached?.toString() ?: "{}")
+                listOf("officialHeadTag", "officialTag", "adminTag", "serviceTag", "coinSellerTag", "coinSeller", "sellerTag", "csTag", "hostTag", "isHost").forEach { key ->
+                    if (remote.has(key)) merged.put(key, remote.opt(key))
+                }
+                val remoteName = sequenceOf("name", "displayName", "userName").map { remote.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" } ?: m.sender
+                val remoteImage = sequenceOf("image", "avatar", "profileImageUrl").map { remote.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" } ?: "https://zyora-server.onrender.com/default-avatar.png"
+                if (remoteName.isNotBlank()) merged.put("name", remoteName)
+                if (remoteImage.isNotBlank()) merged.put("image", remoteImage)
+                withContext(Dispatchers.IO) { profileDb.saveProfile(m.senderAccountId, merged) }
+                profileTags = merged
+            }
+        }
+    }
+
+    val isRoomOwnerMessage = m.senderAccountId == roomOwnerId
+    val isCoreOfficial = m.senderAccountId == "100002" || m.senderAccountId == "100003"
+    val isRedOfficial = m.senderAccountId == "500001"
+    val is500002Official = m.senderAccountId in setOf("500002", "500003", "500004")
+    
+    val officialHeadTag = !is500002Official && (isCoreOfficial || profileTags?.optBoolean("officialHeadTag", false) == true)
+    val officialTag = isCoreOfficial || isRedOfficial || is500002Official || profileTags?.optBoolean("officialTag", false) == true
+    val adminTag = !is500002Official && (isCoreOfficial || profileTags?.optBoolean("adminTag", false) == true)
+    val serviceTag = !is500002Official && (isCoreOfficial || profileTags?.optBoolean("serviceTag", false) == true || profileTags?.optBoolean("csTag", false) == true)
+    val hostTag = !is500002Official && (isCoreOfficial || profileTags?.optBoolean("hostTag", false) == true || profileTags?.optBoolean("isHost", false) == true)
+    val coinSellerTag = !is500002Official && (isCoreOfficial || profileTags?.optBoolean("coinSellerTag", false) == true || profileTags?.optBoolean("coinSeller", false) == true || profileTags?.optBoolean("sellerTag", false) == true)
+    val showPurpleIdImage = isCoreOfficial || isRedOfficial || is500002Official
+    
+    Row(Modifier.fillMaxWidth().padding(vertical=2.dp),verticalAlignment=Alignment.Top,horizontalArrangement=Arrangement.Start){
+        val cachedName = profileTags?.let { profile -> sequenceOf("name", "displayName", "userName").map { profile.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" } }.orEmpty()
+        val cachedImage = profileTags?.let { profile -> sequenceOf("image", "avatar", "profileImageUrl").map { profile.optString(it, "") }.firstOrNull { it.isNotBlank() && it != "null" } }.orEmpty()
+        FallbackAsyncImage(model=cachedImage.ifBlank { m.senderImage.ifBlank { "https://zyora-server.onrender.com/default-avatar.png" } },contentDescription=cachedName.ifBlank { m.sender },modifier=Modifier.padding(top=2.dp).size(28.dp).clip(CircleShape).border(1.dp, Color.White.copy(alpha=.1f), CircleShape).clickable(onClick = onAvatarClick),contentScale=ContentScale.Crop)
+        
+        Column(Modifier.padding(start=8.dp).fillMaxWidth(.75f),verticalArrangement=Arrangement.spacedBy(2.dp)){
+            Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(3.dp)){
+                Text(cachedName.ifBlank { m.sender },color=Color.White.copy(alpha=.9f),fontSize=12.sp,lineHeight=13.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)
+                
+                if (isRoomOwnerMessage || m.senderAccountId in roomAdminIds) {
+                    AsyncImage(model = if (m.senderAccountId in roomAdminIds) ROOM_ADMIN_TAG else "https://zyora-voice-chat.vercel.app/IMG_20261027_235537.png", contentDescription = if (m.senderAccountId in roomAdminIds) "Room Admin" else "Owner", contentScale = ContentScale.Fit, modifier = Modifier.height(16.dp))
+                }
+                if (showPurpleIdImage) {
+                    AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261101_125212.png", contentDescription = "Purple ID", contentScale = ContentScale.Fit, modifier = Modifier.height(16.dp).widthIn(min = 14.dp, max = 22.dp))
+                }
+                Box(modifier = Modifier.height(16.dp).width(36.dp), contentAlignment = Alignment.CenterEnd) {
+                    AsyncImage(model = "https://zyora-voice-chat.vercel.app/IMG_20261028_004355.png", contentDescription = "Level", contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+                    Text("Lv.1", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.offset(x = 2.dp, y = (-3).dp).padding(end = 5.dp))
+                }
+            }
+            if (officialHeadTag || officialTag || adminTag) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(3.dp)){
+                    if(officialHeadTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/file_000000005c388246a5d95dba880d7eb9.png",contentDescription="Official Head",contentScale=ContentScale.Fit,modifier=Modifier.height(20.dp).widthIn(max=68.dp))
+                    if(officialTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261027_102250.png",contentDescription="Official",contentScale=ContentScale.Fit,modifier=Modifier.height(18.dp).widthIn(max=60.dp))
+                    if(adminTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261027_114117.png",contentDescription="Admin",contentScale=ContentScale.Fit,modifier=Modifier.height(16.dp).widthIn(max=56.dp))
+                }
+            }
+            if (serviceTag || hostTag || coinSellerTag) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(3.dp)){
+                    if(serviceTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261027_102207.png",contentDescription="Service / CS",contentScale=ContentScale.Fit,modifier=Modifier.height(16.dp).widthIn(max=56.dp))
+                    if(hostTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261028_154914.png",contentDescription="Host",contentScale=ContentScale.Fit,modifier=Modifier.height(16.dp).widthIn(max=56.dp))
+                    if(coinSellerTag) AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261028_110222.png",contentDescription="Coin Seller",contentScale=ContentScale.Fit,modifier=Modifier.height(16.dp).widthIn(max=56.dp))
+                }
+            }
+            if (m.type == "image" && m.imageUrl.isNotBlank()) {
+                AsyncImage(model = m.imageUrl, contentDescription = "Room shared image",
+                    modifier = Modifier.widthIn(max = 140.dp).heightIn(max = 140.dp)
+                        .clip(RoundedCornerShape(12.dp)).clickable { showRoomImagePreview = true },
+                    contentScale = ContentScale.Crop)
+                if (showRoomImagePreview) {
+                    Dialog(onDismissRequest = { showRoomImagePreview = false },
+                        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                        Box(Modifier.fillMaxSize().background(Color.Black)) {
+                            AsyncImage(model = m.imageUrl, contentDescription = "Image preview",
+                                modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                            IconButton(onClick = { showRoomImagePreview = false },
+                                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 8.dp, top = 6.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Close image", tint = Color.White)
+                            }
+                        }
+                    }
+                }
+            } else Box(Modifier.align(Alignment.Start).twoSecondLongPress { if (m.text.isNotBlank()) onCopyMessage(m.text) }.clip(RoundedCornerShape(topStart=2.dp,topEnd=12.dp,bottomStart=12.dp,bottomEnd=12.dp)).background(Color.Black.copy(alpha=.40f)).border(0.5.dp,Color.White.copy(alpha=.15f),RoundedCornerShape(topStart=2.dp,topEnd=12.dp,bottomStart=12.dp,bottomEnd=12.dp)).padding(horizontal=10.dp,vertical=8.dp)){
+                if (m.mentions.isEmpty()) {
+                    Text(m.text,color=Color.White,fontSize=13.sp,lineHeight=18.sp,softWrap=true)
+                } else {
+                    val annotated = androidx.compose.ui.text.buildAnnotatedString {
+                        var cursor = 0
+                        val matches = m.mentions.mapNotNull { mention ->
+                            val start = m.text.indexOf("@${mention.name}")
+                            if (start >= 0) Triple(start, start + mention.name.length + 1, mention) else null
+                        }.sortedBy { it.first }
+                        matches.forEach { (start, end, mention) ->
+                            if (start < cursor) return@forEach
+                            append(m.text.substring(cursor, start))
+                            pushStringAnnotation(tag = "room-mention", annotation = mention.accountId)
+                            pushStyle(androidx.compose.ui.text.SpanStyle(color = Color(0xFFE2C67D), fontWeight = FontWeight.SemiBold))
+                            append(m.text.substring(start, end))
+                            pop()
+                            pop()
+                            cursor = end
+                        }
+                        if (cursor < m.text.length) append(m.text.substring(cursor))
+                    }
+                    androidx.compose.foundation.text.ClickableText(
+                        text = annotated,
+                        style = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 13.sp, lineHeight = 18.sp),
+                        onClick = { offset ->
+                            val account = annotated.getStringAnnotations("room-mention", offset, offset).firstOrNull()?.item
+                            m.mentions.firstOrNull { it.accountId == account }?.let(onMentionClick)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+@Composable private fun RoomExitMenu(onKeep:()->Unit,onExit:()->Unit,onDismiss:()->Unit){
+    val raw="https://raw.githubusercontent.com/khaiwilsan676-alt/Hurry-Voice-Chat/main/public/"
+    Box(Modifier.fillMaxSize().background(Color.Transparent).clickable{onDismiss()},contentAlignment=Alignment.TopCenter){
+        Box(modifier = Modifier.fillMaxWidth().height(48.percentHeight).background(Brush.verticalGradient(listOf(Color.Black,Color.Black,Color.Black.copy(alpha=.5f),Color.Transparent))).clickable(enabled=false){})
+        Column(modifier = Modifier.fillMaxWidth().height(32.percentHeight),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center){
+            Row(Modifier.fillMaxWidth().padding(horizontal=42.dp).offset(y=(-4).dp),horizontalArrangement=Arrangement.spacedBy(64.dp),verticalAlignment=Alignment.CenterVertically){
+                Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.weight(1f)){
+                    AsyncImage(model=raw+"IMG_20261002_113229.png",contentDescription="Keep",modifier=Modifier.size(67.dp).clickable{onKeep()},contentScale=ContentScale.Fit)
+                    Text("Keep",color=Color.White,fontSize=14.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold)
+                }
+                Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.weight(1f)){
+                    AsyncImage(model=raw+"IMG_20261002_113213.png",contentDescription="Exit",modifier=Modifier.size(67.dp).clickable{onExit()},contentScale=ContentScale.Fit)
+                    Text("Exit",color=Color.White,fontSize=14.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+private val Int.percentHeight: androidx.compose.ui.unit.Dp
+    @Composable get() = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * this / 100
+
+@Composable private fun MemberSheet(seat:NativeRoomSeat,onClose:()->Unit)=SimpleSheet("Member",onClose){
+    FallbackAsyncImage(model=seat.userImage,contentDescription=null,modifier=Modifier.size(76.dp).clip(CircleShape),contentScale=ContentScale.Crop)
+    Text(seat.userName,color=Color.White,fontSize=17.sp);if (seat.accountId in setOf("500002", "500003", "500004")) { Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(3.dp)) { AsyncImage(model="https://zyora-voice-chat.vercel.app/IMG_20261101_125212.png",contentDescription="Purple ID Badge",contentScale=ContentScale.Fit,modifier=Modifier.height(18.dp).widthIn(max=28.dp)); Text(seat.accountId,color=Color.White.copy(.65f),fontSize=12.sp) } } else Text("ID: "+seat.accountId,color=Color.White.copy(.65f),fontSize=12.sp)
+}
+
+@Composable private fun GamesSheet(onClose:()->Unit,onWildParty:()->Unit,onFruitParty:()->Unit){
+    val context=LocalContext.current
+    val wildIcon=context.resources.getIdentifier("fp_file_000000009d808211b8ffb7c2183b4ef5","drawable",context.packageName)
+    val fruitIcon=context.resources.getIdentifier("fp_file_00000000c9e08211ab3e8c4d511b7965","drawable",context.packageName)
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.30f)).clickable{onClose()},contentAlignment=Alignment.BottomCenter){
+        Surface(Modifier.fillMaxWidth().clickable(enabled=false){},color=Color.Black.copy(alpha=0.92f),shape=RoundedCornerShape(topStart=15.dp,topEnd=15.dp)){
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start=16.dp,end=16.dp,top=12.dp,bottom=24.dp)){
+                Text("Games",color=Color.White,fontSize=16.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.Bold)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement=Arrangement.spacedBy(20.dp),verticalAlignment=Alignment.Top){
+                    Column(Modifier.clickable{onWildParty()}, horizontalAlignment=Alignment.CenterHorizontally){
+                        if(wildIcon!=0) Image(painterResource(wildIcon),contentDescription="Wild party",modifier=Modifier.size(56.dp),contentScale=ContentScale.Fit)
+                        Spacer(Modifier.height(2.dp))
+                        Text("Wild party",color=Color.White,fontSize=10.sp,maxLines=1,softWrap=false)
+                    }
+                    Column(Modifier.clickable{onFruitParty()}, horizontalAlignment=Alignment.CenterHorizontally){
+                        if(fruitIcon!=0) Image(painterResource(fruitIcon),contentDescription="Fruit party",modifier=Modifier.size(54.dp).clip(RoundedCornerShape(6.dp)),contentScale=ContentScale.Fit)
+                        Spacer(Modifier.height(2.dp))
+                        Text("Fruit party",color=Color.White,fontSize=10.sp,maxLines=1,softWrap=false)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun SimpleSheet(title:String,onClose:()->Unit,content: @Composable () -> Unit){
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(.42f)).clickable{onClose()},contentAlignment=Alignment.BottomCenter){
+        Surface(Modifier.fillMaxWidth().clickable(enabled=false){},color=Color(0xFF171717),shape=RoundedCornerShape(topStart=22.dp,topEnd=22.dp)){
+            Column(Modifier.padding(18.dp).navigationBarsPadding()){
+                Row(verticalAlignment=Alignment.CenterVertically){Text(title,color=Color.White,fontSize=18.sp,modifier=Modifier.weight(1f));IconButton(onClick=onClose){Icon(Icons.Default.Close,null,tint=Color.White)}}
+                content();Spacer(Modifier.height(18.dp))
+            }
+        }
+    }
+}
+
+private fun roomCountryFlag(country: String): String {
+    val value = country.trim()
+    return when {
+        value.contains("india", true) || value.contains("🇮🇳") -> "🇮🇳"
+        value.contains("singapore", true) || value.contains("🇸🇬") -> "🇸🇬"
+        value.contains("pakistan", true) || value.contains("🇵🇰") -> "🇵🇰"
+        value.contains("usa", true) || value.contains("united states", true) || value.contains("🇺🇸") -> "🇺🇸"
+        value.contains("south africa", true) || value.contains("🇿🇦") -> "🇿🇦"
+        value.contains("turkey", true) || value.contains("türkiye", true) || value.contains("🇹🇷") -> "🇹🇷"
+        value.isBlank() -> ""
+        else -> countryFlag(value)
+    }
+}
