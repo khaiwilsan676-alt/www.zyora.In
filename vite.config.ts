@@ -5,6 +5,9 @@ import { fileURLToPath, URL } from 'node:url';
 export default defineConfig({
   base: '/www.zyora.In/',
   plugins: [react()],
+  define: {
+    'process.env.NEXT_PUBLIC_BACKEND_URL': JSON.stringify('https://hurry-voice-chat-lz75.onrender.com'),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('.', import.meta.url)),
