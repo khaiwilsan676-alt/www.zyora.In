@@ -71,7 +71,8 @@ jobs:
       # GitHub-hosted runners are disposable. Preserve the debug keystore so
       # every native APK keeps the same signing certificate required by Google OAuth.
       - name: Restore stable Android debug signing key
-        uses: actions/cache@v4
+        id: signing_key_cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.android/debug.keystore
           key: zyora-native-debug-keystore-v1
@@ -92,6 +93,15 @@ jobs:
           fi
           chmod 600 "$HOME/.android/debug.keystore"
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:"
+
+      # Save the generated key even when compilation later fails, so the next run
+      # cannot silently create a different certificate.
+      - name: Persist stable Android debug signing key
+        if: always() && steps.signing_key_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: zyora-native-debug-keystore-v1
 
       - name: Build actual Native APK
         working-directory: android-native
@@ -116,10 +126,12 @@ jobs:
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/zyora-apk-certificate.txt
           SHA1=$(sed -n 's/.*certificate SHA-1 digest: //p' /tmp/zyora-apk-certificate.txt | head -n 1)
+          SHA256=$(sed -n 's/.*certificate SHA-256 digest: //p' /tmp/zyora-apk-certificate.txt | head -n 1)
           echo "## Google OAuth Android certificate" >> "$GITHUB_STEP_SUMMARY"
           echo "Package: com.hawa.app" >> "$GITHUB_STEP_SUMMARY"
           echo "APK signing SHA-1: `$SHA1`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Compare this SHA-1 with the Android OAuth client registered in Google Cloud."
+          echo "APK signing SHA-256: `$SHA256`" >> "$GITHUB_STEP_SUMMARY"
+          echo "These fingerprints must match the Android OAuth client registered in Google Cloud." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stream Native APK in browser with Appetize
         if: ${{ env.APPETIZE_API_TOKEN != '' && github.event_name != 'pull_request' }}
