@@ -162,16 +162,6 @@ fun NativeLoginScreen(onLoginSuccess: () -> Unit) {
                 if (password.length < 6) {
                     throw IllegalArgumentException("Password must be at least 6 characters long.")
                 }
-                if (create) {
-                    val existingDeviceAccount = withContext(Dispatchers.IO) { getDeviceRegistration(context, "Email/Password") }
-                    if (existingDeviceAccount.optBoolean("registered", false)) {
-                        registeredDeviceAccountId = existingDeviceAccount.optString("registeredAccountId")
-                        registeredDeviceEmail = existingDeviceAccount.optString("registeredEmail")
-                        registeredDeviceMethod = existingDeviceAccount.optString("registeredMethod", "Google")
-                        showDeviceRegisteredDialog = true
-                        return@launch
-                    }
-                }
                 val user = withContext(Dispatchers.IO) {
                     backendEmailAuth(context, email.trim(), password, create)
                 }
@@ -775,11 +765,37 @@ private fun getDeviceRegistration(
     )
 }
 
+private fun isOfficialLoginAccount(user: JSONObject): Boolean {
+    val uid = user.optString("localId").trim()
+    val accountId = user.optString("accountId").trim()
+    val officialAccountIds = setOf(
+        "100002", "100003", "500001", "500002", "500003", "500004", "500005"
+    )
+    val officialFirebaseUids = setOf(
+        "mhg5MzmPcAMbH7InQwZClPfF42M2",
+        "na7uRGa4ZPU4Suq6P63fxX6q1P12",
+        "dCt4l5GbjnMpOeBywiDSH6XfCoj1",
+        "a0yVqX9dEiS2ZZH6eQmpjs3QrUf1",
+        "g0d2pU1SIcMdSAA9UjayDsIPjYv1",
+        "nB0zGbJu5yf7ZeHMt5pnMIhzjGB3",
+        "i8uHx21ZMOSL8tR2Gim14bDJ36E3",
+        "HUSxSvQnabgU029dWYt1TUV04hd2",
+        "ADqW31RGBMaosOzy0HiqexKSD7h1"
+    )
+    return accountId in officialAccountIds || uid in officialAccountIds || uid in officialFirebaseUids
+}
+
 private fun verifyDeviceGoogleAccount(
     user: JSONObject,
     context: android.content.Context,
     registerMethod: String = "Google"
 ): JSONObject {
+    // Official Zyora IDs are independent managed identities, not normal device
+    // registrations. Different login providers must not consume the normal
+    // one/two-account-per-device allowance for these IDs.
+    if (isOfficialLoginAccount(user)) {
+        return JSONObject().put("allowed", true).put("officialAccount", true)
+    }
     val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
     val uid = user.optString("localId").trim()
     if (deviceId.isBlank() || uid.isBlank()) throw IllegalStateException("Could not verify this device's registered account.")
